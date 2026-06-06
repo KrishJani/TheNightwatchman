@@ -8,6 +8,15 @@ TRANSCRIPT_STREAM = "guardian:transcript"
 AGENTS_GROUP = "agents"
 RISK_TIMELINE = "guardian:risk_timeline"
 ALERTS_CHANNEL = "guardian:alerts"
+COACHING_CHANNEL = "guardian:coaching"
+KNOWN_SCAMMERS_FILTER = "guardian:known_scammers"
+SEED_SCAMMER_NUMBERS = [
+    "14155551234",
+    "18005559999",
+    "12125550000",
+    "19175551111",
+    "16505558888",
+]
 
 
 def get_redis_client() -> Redis:
@@ -45,5 +54,43 @@ async def create_risk_timeline() -> None:
     except ResponseError as error:
         if "already exists" not in str(error).lower():
             raise
+    finally:
+        await redis.aclose()
+
+
+async def create_known_scammers_filter() -> None:
+    redis = get_redis_client()
+    try:
+        try:
+            await redis.execute_command(
+                "BF.RESERVE",
+                KNOWN_SCAMMERS_FILTER,
+                0.001,
+                10000,
+            )
+        except ResponseError as error:
+            if "item exists" not in str(error).lower():
+                raise
+
+        for phone_number in SEED_SCAMMER_NUMBERS:
+            await redis.execute_command("BF.ADD", KNOWN_SCAMMERS_FILTER, phone_number)
+    finally:
+        await redis.aclose()
+
+
+async def add_scammer(phone_number: str) -> None:
+    redis = get_redis_client()
+    try:
+        await redis.execute_command("BF.ADD", KNOWN_SCAMMERS_FILTER, phone_number)
+    finally:
+        await redis.aclose()
+
+
+async def is_known_scammer(phone_number: str) -> bool:
+    redis = get_redis_client()
+    try:
+        return bool(
+            await redis.execute_command("BF.EXISTS", KNOWN_SCAMMERS_FILTER, phone_number)
+        )
     finally:
         await redis.aclose()

@@ -3,4 +3,3 @@ guardian/.venv/
 frontend/node_modules/
 frontend/dist/
 __pycache__/
-.cursor/

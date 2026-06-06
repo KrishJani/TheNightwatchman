@@ -18,6 +18,8 @@ function getRiskColor(score) {
 
 function App() {
   const [connectionStatus, setConnectionStatus] = useState("connecting");
+  const [knownScammerMessage, setKnownScammerMessage] = useState("");
+  const [coachingTip, setCoachingTip] = useState("");
   const [utterances, setUtterances] = useState([]);
   const [riskScore, setRiskScore] = useState(0);
 
@@ -30,6 +32,16 @@ function App() {
 
     socket.addEventListener("message", (event) => {
       const alert = JSON.parse(event.data);
+      if (alert.type === "known_scammer") {
+        setKnownScammerMessage(alert.message);
+        return;
+      }
+
+      if (alert.type === "coaching_tip") {
+        setCoachingTip(alert.tip);
+        return;
+      }
+
       const nextScore = Number(alert.score ?? 0);
 
       setRiskScore(nextScore);
@@ -64,6 +76,10 @@ function App() {
 
   return (
     <main className="app">
+      {knownScammerMessage && (
+        <section className="known-scammer-banner">{knownScammerMessage}</section>
+      )}
+
       <section className="panel hero">
         <div>
           <p className="eyebrow">Guardian</p>
@@ -108,6 +124,10 @@ function App() {
           )}
         </div>
       </section>
+
+      {coachingTip && (
+        <section className="coaching-card">You could say: {coachingTip}</section>
+      )}
     </main>
   );
 }

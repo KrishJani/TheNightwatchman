@@ -4,6 +4,7 @@ import time
 from redis_client import TRANSCRIPT_STREAM, create_stream, get_redis_client
 
 
+SIMULATED_CALLER_NUMBER = "14155551234"
 SAMPLE_SCRIPT = [
     "This is Officer Daniel Harris with the county police department. I'm calling about your grandson, Michael.",
     "Michael? Is he okay? What happened?",
@@ -27,6 +28,7 @@ async def simulate_call(script: list[str]) -> None:
             await redis.xadd(
                 TRANSCRIPT_STREAM,
                 {
+                    "caller_number": SIMULATED_CALLER_NUMBER,
                     "speaker": "caller" if index % 2 == 0 else "victim",
                     "text": utterance,
                     "timestamp": time.time(),
