@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+redis
+langgraph
+weave
+openai
+python-dotenv
+redisvl
+asyncio
