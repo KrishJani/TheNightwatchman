@@ -512,6 +512,7 @@ function App() {
   const [isStartingCall, setIsStartingCall] = useState(false);
   const [isSimulating, setIsSimulating] = useState(false);
   const [isMicCallActive, setIsMicCallActive] = useState(false);
+  const [isMicMuted, setIsMicMuted] = useState(false);
   const [micDenied, setMicDenied] = useState(false);
   const [twilioConfigured, setTwilioConfigured] = useState(false);
   const [twilioCallActive, setTwilioCallActive] = useState(false);
@@ -528,6 +529,7 @@ function App() {
   const mediaRecorderRef = useRef(null);
   const mediaStreamRef = useRef(null);
   const micRecordingActiveRef = useRef(false);
+  const micMutedRef = useRef(false);
   const micChunkTimerRef = useRef(null);
   const micChunksRef = useRef([]);
   const micMimeTypeRef = useRef("");
@@ -623,7 +625,12 @@ function App() {
 
   function startMicRecordingCycle() {
     const recorder = mediaRecorderRef.current;
-    if (!recorder || !micRecordingActiveRef.current || recorder.state !== "inactive") {
+    if (
+      !recorder ||
+      !micRecordingActiveRef.current ||
+      micMutedRef.current ||
+      recorder.state !== "inactive"
+    ) {
       return;
     }
 
@@ -632,8 +639,37 @@ function App() {
     scheduleMicChunkStop();
   }
 
+  function pauseMicRecording() {
+    if (micChunkTimerRef.current) {
+      window.clearTimeout(micChunkTimerRef.current);
+      micChunkTimerRef.current = null;
+    }
+
+    micChunksRef.current = [];
+
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state === "recording") {
+      recorder.stop();
+    }
+  }
+
+  function handleToggleMicMute() {
+    const nextMuted = !isMicMuted;
+    micMutedRef.current = nextMuted;
+    setIsMicMuted(nextMuted);
+
+    if (nextMuted) {
+      pauseMicRecording();
+      return;
+    }
+
+    startMicRecordingCycle();
+  }
+
   function stopMicrophoneCapture() {
     micRecordingActiveRef.current = false;
+    micMutedRef.current = false;
+    setIsMicMuted(false);
 
     if (micChunkTimerRef.current) {
       window.clearTimeout(micChunkTimerRef.current);
@@ -688,6 +724,8 @@ function App() {
     setUtterances([]);
     setRiskScore(0);
     setMicDenied(false);
+    setIsMicMuted(false);
+    micMutedRef.current = false;
     setTwilioCallActive(false);
     stopMicrophoneCapture();
 
@@ -717,13 +755,13 @@ function App() {
         const chunks = micChunksRef.current;
         micChunksRef.current = [];
 
-        if (chunks.length > 0) {
+        if (!micMutedRef.current && chunks.length > 0) {
           const blob = new Blob(chunks, { type: micMimeTypeRef.current });
           const filename = micMimeTypeRef.current.includes("mp4") ? "chunk.mp4" : "chunk.webm";
           await uploadMicChunk(blob, filename);
         }
 
-        if (micRecordingActiveRef.current) {
+        if (micRecordingActiveRef.current && !micMutedRef.current) {
           startMicRecordingCycle();
         }
       };
@@ -1275,7 +1313,22 @@ function App() {
                 >
                   {isEndingCall ? "Ending call..." : "End Call"}
                 </button>
-                {isMicCallActive && <span className="mic-active-pill">Mic live</span>}
+                {isMicCallActive && (
+                  <button
+                    aria-pressed={isMicMuted}
+                    className={`mic-mute-button compact ${isMicMuted ? "is-muted" : ""}`}
+                    onClick={handleToggleMicMute}
+                    type="button"
+                  >
+                    {isMicMuted ? "Unmute" : "Mute"}
+                  </button>
+                )}
+                {isMicCallActive && !isMicMuted && (
+                  <span className="mic-active-pill">Mic live</span>
+                )}
+                {isMicCallActive && isMicMuted && (
+                  <span className="mic-muted-pill">Mic muted</span>
+                )}
                 {isMicCallActive && !twilioConfigured && (
                   <span className="twilio-simulated-pill">
                     Twilio not connected — simulated mode

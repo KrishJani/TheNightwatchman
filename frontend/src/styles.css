@@ -1581,11 +1581,41 @@ h1 {
   text-align: center;
 }
 
+.mic-mute-button {
+  background: color-mix(in srgb, var(--surface-strong), transparent 8%);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 800;
+  padding: 8px 14px;
+}
+
+.mic-mute-button.is-muted {
+  background: var(--warning-soft);
+  border-color: color-mix(in srgb, var(--warning), transparent 62%);
+  color: var(--warning);
+}
+
+.mic-mute-button:hover {
+  border-color: color-mix(in srgb, var(--text), transparent 72%);
+}
+
 .mic-active-pill {
   background: var(--success-soft);
   border: 1px solid color-mix(in srgb, var(--success), transparent 62%);
   border-radius: 999px;
   color: var(--success);
+  font-size: 0.75rem;
+  font-weight: 850;
+  padding: 6px 10px;
+}
+
+.mic-muted-pill {
+  background: var(--warning-soft);
+  border: 1px solid color-mix(in srgb, var(--warning), transparent 62%);
+  border-radius: 999px;
+  color: var(--warning);
   font-size: 0.75rem;
   font-weight: 850;
   padding: 6px 10px;
