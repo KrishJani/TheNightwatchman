@@ -1,10 +1,11 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { getInitialTheme, getNextTheme, THEME_STORAGE_KEY } from "./theme";
 import "./styles.css";
 
 const WEBSOCKET_URL = "ws://localhost:8000/ws";
 const API_BASE_URL = "http://localhost:8000";
+const ARCHITECTURE_URL = "https://app.eraser.io/workspace/dygGZhvvUSu03e7ZHjXt?origin=share";
 
 const PROMISE_CARDS = [
   {
@@ -34,30 +35,35 @@ const AGENTS = [
     name: "Sentinel",
     role: "Risk watcher",
     description: "Listens for scam tactics and risk escalation in real time.",
+    contribution: "Detects pressure, secrecy, urgency, and impersonation patterns.",
     className: "sentinel",
   },
   {
     name: "Verifier",
     role: "Claim checker",
     description: "Marks suspicious or unverifiable statements before anyone acts on them.",
+    contribution: "Gives the family a safer pause before trusting a caller's claim.",
     className: "verifier",
   },
   {
     name: "Coach",
     role: "Calm response guide",
     description: "Suggests safer things to say when the conversation gets tense.",
+    contribution: "Turns risk into a composed next sentence.",
     className: "coach",
   },
   {
     name: "Ally",
     role: "Trusted-contact bridge",
     description: "Prepares a concise alert when help from family or a friend is needed.",
+    contribution: "Brings in the right person without creating panic.",
     className: "ally",
   },
   {
     name: "Scribe",
     role: "Incident recorder",
     description: "Captures the useful details needed for review and reports.",
+    contribution: "Documents only what matters for follow-up and recovery.",
     className: "scribe",
   },
 ];
@@ -115,7 +121,24 @@ function buildUtterance(alert) {
     score: Number(alert.score ?? 0),
     playbookMatch: alert.playbook_match ?? "",
     verificationVerdict: "",
+    coachingTip: "",
   };
+}
+
+function formatTacticLabel(tactic) {
+  if (!tactic || tactic === "ANALYZING") {
+    return "Analyzing…";
+  }
+
+  if (tactic === "NONE") {
+    return "No risk detected";
+  }
+
+  return tactic
+    .toLowerCase()
+    .split("_")
+    .join(" ")
+    .replace(/^\w/, (character) => character.toUpperCase());
 }
 
 function getVerificationTag(verdict) {
@@ -141,6 +164,8 @@ function App() {
   const [isEndingCall, setIsEndingCall] = useState(false);
   const [allyAlert, setAllyAlert] = useState("");
   const [allyCopied, setAllyCopied] = useState(false);
+  const [activeTab, setActiveTab] = useState("home");
+  const transcriptEndRef = useRef(null);
   const [theme, setTheme] = useState(() =>
     getInitialTheme({
       savedTheme: window.localStorage.getItem(THEME_STORAGE_KEY),
@@ -154,7 +179,16 @@ function App() {
     setUtterances((current) => {
       const utterance = buildUtterance(alert);
       const existing = current.find((item) => item.id === utterance.id);
-      const merged = existing ? { ...existing, ...utterance } : utterance;
+      // Preserve fields that arrive on other events (verification, coaching)
+      // so a later risk update does not wipe them out.
+      const merged = existing
+        ? {
+            ...existing,
+            ...utterance,
+            verificationVerdict: existing.verificationVerdict,
+            coachingTip: existing.coachingTip,
+          }
+        : utterance;
       const withoutDuplicate = current.filter((item) => item.id !== merged.id);
       return [...withoutDuplicate, merged].slice(-10);
     });
@@ -170,6 +204,7 @@ function App() {
         score: existing?.score ?? 0,
         playbookMatch: existing?.playbookMatch ?? "",
         verificationVerdict: existing?.verificationVerdict ?? "",
+        coachingTip: existing?.coachingTip ?? "",
       };
       const withoutDuplicate = current.filter((item) => item.id !== utterance.id);
       return [...withoutDuplicate, utterance].slice(-10);
@@ -243,6 +278,10 @@ function App() {
   }, [theme]);
 
   useEffect(() => {
+    transcriptEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [utterances]);
+
+  useEffect(() => {
     const socket = new WebSocket(WEBSOCKET_URL);
 
     socket.addEventListener("open", () => {
@@ -263,7 +302,18 @@ function App() {
       }
 
       if (alert.type === "coaching_tip") {
-        setCoachingTip(alert.tip);
+        const tip = alert.tip ?? "";
+        if (!tip) {
+          return;
+        }
+        setCoachingTip(tip);
+        if (alert.message_id) {
+          setUtterances((current) =>
+            current.map((item) =>
+              item.id === alert.message_id ? { ...item, coachingTip: tip } : item,
+            ),
+          );
+        }
         return;
       }
 
@@ -337,10 +387,25 @@ function App() {
           <span>The Nightwatchman</span>
         </a>
         <div className="nav-links">
-          <a href="#product">Product</a>
-          <a href="#agents">Agents</a>
-          <a href="#console">Live Console</a>
-          <a href="#trust">Trust</a>
+          <a href="#agents" onClick={() => setActiveTab("home")}>
+            Agents
+          </a>
+          <a href="#product" onClick={() => setActiveTab("home")}>
+            Product
+          </a>
+          <a href="#console" onClick={() => setActiveTab("home")}>
+            Live Console
+          </a>
+          <a href="#trust" onClick={() => setActiveTab("home")}>
+            Trust
+          </a>
+          <button
+            type="button"
+            className={`nav-tab ${activeTab === "architecture" ? "active" : ""}`}
+            onClick={() => setActiveTab("architecture")}
+          >
+            Architecture
+          </button>
         </div>
         <button className="theme-toggle" onClick={handleToggleTheme} type="button">
           <span>{theme === "dark" ? "Dark" : "Light"}</span>
@@ -350,14 +415,35 @@ function App() {
         </button>
       </nav>
 
+      {activeTab === "architecture" ? (
+        <section className="architecture-section">
+          <div className="architecture-card section-panel">
+            <p className="eyebrow">System architecture</p>
+            <h1>Guardian system architecture</h1>
+            <p>
+              Eraser blocks this shared workspace from loading inside third-party
+              iframes, so open the architecture diagram directly in Eraser.
+            </p>
+            <a
+              className="primary-button"
+              href={ARCHITECTURE_URL}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open architecture diagram
+            </a>
+          </div>
+        </section>
+      ) : (
+        <>
       <section className="hero-section" id="top">
         <div className="hero-copy">
           <p className="eyebrow">Family-first call protection</p>
           <h1>A trusted voice beside every call.</h1>
           <p className="hero-subtitle">
-            The Nightwatchman listens for scam tactics, checks suspicious claims,
-            coaches safer responses, and prepares trusted-contact alerts when a
-            call starts to feel wrong.
+            Five specialized agents work together in real time: listening for scam
+            tactics, verifying suspicious claims, coaching calm responses, alerting
+            trusted contacts, and documenting only what matters.
           </p>
           <div className="hero-actions">
             <button
@@ -395,31 +481,22 @@ function App() {
         </aside>
       </section>
 
-      <section className="promise-grid section-panel" id="product" aria-label="Product capabilities">
-        {PROMISE_CARDS.map((card) => (
-          <article className="promise-card" key={card.title}>
-            <span className="promise-icon" />
-            <h2>{card.title}</h2>
-            <p>{card.description}</p>
-          </article>
-        ))}
-      </section>
-
       <section className="agents-section section-panel" id="agents">
         <div className="section-heading">
-          <p className="eyebrow">Multi-agent protection</p>
-          <h2>A coordinated safety team, not a single chatbot.</h2>
+          <p className="eyebrow">Flagship protection engine</p>
+          <h2>Five specialized agents working beside every call.</h2>
           <p>
-            Each agent has a focused job, and the interface shows them as a calm
-            constellation around the call instead of a noisy technical diagram.
+            The Nightwatchman is not a single chatbot. It is a coordinated safety
+            system where each agent owns one critical part of protection.
           </p>
         </div>
 
         <div className="agent-constellation">
           <div className="agent-call-core">
             <span className="call-core-ring" />
-            <strong>Live call</strong>
-            <span>{utterances.length || "No"} moments tracked</span>
+            <p>Protection Engine</p>
+            <strong>5 agents</strong>
+            <span>{utterances.length || "No"} call moments tracked</span>
           </div>
           {AGENTS.map((agent) => (
             <article
@@ -429,13 +506,27 @@ function App() {
               key={agent.name}
               tabIndex="0"
             >
-              <span className="agent-status-dot" />
+              <div className="agent-node-header">
+                <span className="agent-mark">{agent.name.slice(0, 1)}</span>
+                <span className="agent-status-dot" />
+              </div>
               <p>{agent.role}</p>
               <h3>{agent.name}</h3>
               <span>{agent.description}</span>
+              <strong>{agent.contribution}</strong>
             </article>
           ))}
         </div>
+      </section>
+
+      <section className="promise-grid section-panel" id="product" aria-label="Product capabilities">
+        {PROMISE_CARDS.map((card) => (
+          <article className="promise-card" key={card.title}>
+            <span className="promise-icon" />
+            <h2>{card.title}</h2>
+            <p>{card.description}</p>
+          </article>
+        ))}
       </section>
 
       <section className="steps-section" aria-label="How protection works">
@@ -533,7 +624,11 @@ function App() {
                         <p>{utterance.text}</p>
                         <div className="utterance-meta">
                           <span>
-                            {utterance.tactic} · {utterance.score.toFixed(2)}
+                            {formatTacticLabel(utterance.tactic)}
+                            {utterance.tactic &&
+                              utterance.tactic !== "NONE" &&
+                              utterance.tactic !== "ANALYZING" &&
+                              ` · ${utterance.score.toFixed(2)}`}
                           </span>
                           {utterance.playbookMatch && (
                             <span className="playbook-tag">
@@ -546,10 +641,17 @@ function App() {
                             </span>
                           )}
                         </div>
+                        {utterance.coachingTip && (
+                          <p className="utterance-coaching">
+                            <span>Coach</span>
+                            {utterance.coachingTip}
+                          </p>
+                        )}
                       </article>
                     );
                   })
                 )}
+                <div ref={transcriptEndRef} />
               </div>
             </section>
           </div>
@@ -621,6 +723,8 @@ function App() {
           action.
         </p>
       </section>
+        </>
+      )}
     </main>
   );
 }

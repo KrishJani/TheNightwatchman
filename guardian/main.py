@@ -25,12 +25,16 @@ from redis_client import (
     VERIFICATION_CHANNEL,
     TRANSCRIPT_STREAM,
     cleanup_call_data,
+    clear_call_active,
+    coaching_key,
     create_known_scammers_filter,
     create_playbooks_vset,
     create_risk_timeline,
     create_stream,
     get_redis_client,
+    is_call_active,
     is_known_scammer,
+    set_call_active,
 )
 
 
@@ -146,6 +150,7 @@ async def health():
 async def simulate(background_tasks: BackgroundTasks):
     incident_log.reset()
     await cleanup_call_data([], [])
+    await set_call_active()
     background_tasks.add_task(simulate_call, SAMPLE_SCRIPT)
     return {"status": "started", "entries": len(SAMPLE_SCRIPT)}
 
@@ -154,6 +159,7 @@ async def simulate(background_tasks: BackgroundTasks):
 async def reset_call():
     incident_log.reset()
     await cleanup_call_data([], [])
+    await set_call_active()
     return {"status": "ready", "message": "Ready for a live Twilio call."}
 
 
@@ -214,6 +220,19 @@ async def _send_call_history(websocket: WebSocket) -> None:
                     )
                 )
 
+            coaching_data = await redis.hgetall(coaching_key(message_id))
+            if coaching_data and coaching_data.get("tip"):
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "coaching_tip",
+                            "message_id": message_id,
+                            "tactic": coaching_data.get("tactic", ""),
+                            "tip": coaching_data.get("tip", ""),
+                        }
+                    )
+                )
+
         ally_alert = await redis.get(ALLY_ALERT_KEY)
         if ally_alert:
             await websocket.send_text(
@@ -250,15 +269,19 @@ async def download_report(timestamp: str):
 async def websocket_alerts(websocket: WebSocket):
     await websocket.accept()
 
-    if await is_known_scammer(SIMULATED_CALLER_NUMBER):
-        await websocket.send_json(
-            {
-                "type": "known_scammer",
-                "message": "This number has been reported for scam calls",
-            }
-        )
+    # Only surface call-specific state (known-scammer banner + transcript
+    # history) while a call session is active. This prevents a fresh page load
+    # from replaying a previous, finished conversation.
+    if await is_call_active():
+        if await is_known_scammer(SIMULATED_CALLER_NUMBER):
+            await websocket.send_json(
+                {
+                    "type": "known_scammer",
+                    "message": "This number has been reported for scam calls",
+                }
+            )
 
-    await _send_call_history(websocket)
+        await _send_call_history(websocket)
 
     redis = get_redis_client()
     pubsub = redis.pubsub()
@@ -275,7 +298,7 @@ async def websocket_alerts(websocket: WebSocket):
         while True:
             message = await pubsub.get_message(
                 ignore_subscribe_messages=True,
-                timeout=1,
+                timeout=0.2,
             )
             if message is None:
                 continue

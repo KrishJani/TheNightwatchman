@@ -534,6 +534,10 @@ async def finalize_call() -> dict[str, str]:
         filename = f"guardian_incident_{timestamp}.pdf"
         report_path = REPORTS_DIR / filename
         _write_report_pdf(report_path, sections, transcript, timestamp, max_risk)
+
+        # The report on disk now captures everything; clear the live call data
+        # and end the session so the finished conversation is not replayed.
+        await cleanup_call_data(message_ids, risk_timestamps_ms)
         incident_log.reset()
 
         print(f"Scribe confirmed scam (max risk {max_risk:.2f}); report saved to {report_path}", flush=True)

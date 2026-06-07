@@ -1,5 +1,6 @@
 import json
 import os
+import time
 
 from openai import AsyncOpenAI
 from redis.asyncio import Redis
@@ -15,6 +16,7 @@ COACHING_CHANNEL = "guardian:coaching"
 VERIFICATION_CHANNEL = "guardian:verification"
 ALLY_CHANNEL = "guardian:ally"
 ALLY_ALERT_KEY = "guardian:ally_alert"
+CALL_ACTIVE_KEY = "guardian:call_active"
 KNOWN_SCAMMERS_FILTER = "guardian:known_scammers"
 PLAYBOOKS_VSET = "guardian:playbooks"
 EMBEDDING_MODEL = "text-embedding-3-small"
@@ -78,6 +80,34 @@ def get_redis_client() -> Redis:
         password=os.getenv("REDIS_PASSWORD") or None,
         decode_responses=True,
     )
+
+
+def coaching_key(message_id: str) -> str:
+    return f"guardian:coaching:{message_id}"
+
+
+async def set_call_active() -> None:
+    redis = get_redis_client()
+    try:
+        await redis.set(CALL_ACTIVE_KEY, "1")
+    finally:
+        await redis.aclose()
+
+
+async def clear_call_active() -> None:
+    redis = get_redis_client()
+    try:
+        await redis.delete(CALL_ACTIVE_KEY)
+    finally:
+        await redis.aclose()
+
+
+async def is_call_active() -> bool:
+    redis = get_redis_client()
+    try:
+        return bool(await redis.exists(CALL_ACTIVE_KEY))
+    finally:
+        await redis.aclose()
 
 
 async def create_stream() -> None:
@@ -257,14 +287,17 @@ async def cleanup_call_data(
             await redis.xdel(TRANSCRIPT_STREAM, message_id)
             await redis.delete(f"guardian:tactic:{message_id}")
             await redis.delete(f"guardian:verification:{message_id}")
+            await redis.delete(coaching_key(message_id))
 
         await redis.delete(ALLY_ALERT_KEY)
+        await redis.delete(CALL_ACTIVE_KEY)
 
-        if risk_timestamps_ms:
-            await redis.ts().delete(
-                RISK_TIMELINE,
-                min(risk_timestamps_ms),
-                max(risk_timestamps_ms),
-            )
+        # Always clear the full risk timeline so a finished call cannot leak
+        # stale high-risk points into the next call's ally/risk evaluation.
+        if await redis.exists(RISK_TIMELINE):
+            try:
+                await redis.ts().delete(RISK_TIMELINE, 0, int(time.time() * 1000) + 1)
+            except ResponseError:
+                pass
     finally:
         await redis.aclose()

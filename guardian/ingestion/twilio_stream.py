@@ -1,7 +1,10 @@
+import array
 import asyncio
 import base64
 import json
+import math
 import os
+import re
 import tempfile
 import time
 import traceback
@@ -28,8 +31,13 @@ TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER", "")
 WHISPER_MODEL = "whisper-1"
-AUDIO_FLUSH_SECONDS = 3
-MIN_TRANSCRIPT_WORDS = 5
+# Lower flush interval => speech reaches the console sooner. ~2s still gives
+# Whisper enough audio for a usable transcription.
+AUDIO_FLUSH_SECONDS = 2
+MIN_TRANSCRIPT_WORDS = 3
+# A short fragment is held at most this many flush cycles before being
+# published anyway, so slow/short speech never gets stuck waiting for more.
+MAX_PENDING_FLUSH_CYCLES = 1
 MULAW_SAMPLE_RATE = 8000
 PCM_SAMPLE_WIDTH = 2
 SCAM_TRANSCRIPT_KEYWORDS = {
@@ -44,6 +52,39 @@ SCAM_TRANSCRIPT_KEYWORDS = {
     "police",
     "officer",
     "urgent",
+}
+# Below this RMS amplitude a chunk is treated as silence/line noise and never
+# sent to Whisper. Whisper invents text ("Bye.", "Thank you.") on near-silence,
+# so skipping these chunks removes phantom transcript lines at the source.
+SILENCE_RMS_THRESHOLD = 220
+# Phrases Whisper commonly hallucinates over silence or background noise.
+# Compared after lowercasing and stripping punctuation.
+WHISPER_HALLUCINATIONS = {
+    "",
+    "you",
+    "thank you",
+    "thank you very much",
+    "thank you for watching",
+    "thanks",
+    "thanks for watching",
+    "bye",
+    "bye bye",
+    "goodbye",
+    "okay",
+    "ok",
+    "uh",
+    "um",
+    "hmm",
+    "mm",
+    "mhm",
+    "mm hmm",
+    "yeah",
+    "so",
+    "the",
+    "please subscribe",
+    "subscribe",
+    "music",
+    "silence",
 }
 
 
@@ -114,10 +155,7 @@ def _mulaw_to_pcm(mulaw_audio: bytes) -> bytes:
     return bytes(pcm)
 
 
-def _write_wav_file(mulaw_payloads: list[str]) -> str:
-    mulaw_audio = b"".join(base64.b64decode(payload) for payload in mulaw_payloads)
-    pcm_audio = _mulaw_to_pcm(mulaw_audio)
-
+def _write_wav_file(pcm_audio: bytes) -> str:
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
     temp_path = temp_file.name
     temp_file.close()
@@ -175,9 +213,16 @@ async def _transcribe_audio_chunk(mulaw_payloads: list[str]) -> str:
     if not mulaw_payloads:
         return ""
 
+    mulaw_audio = b"".join(base64.b64decode(payload) for payload in mulaw_payloads)
+    pcm_audio = _mulaw_to_pcm(mulaw_audio)
+
+    # Skip near-silent audio so Whisper never hallucinates filler over it.
+    if _pcm_rms(pcm_audio) < SILENCE_RMS_THRESHOLD:
+        return ""
+
     wav_path = ""
     try:
-        wav_path = _write_wav_file(mulaw_payloads)
+        wav_path = _write_wav_file(pcm_audio)
         transcription = await _transcribe_wav_file(wav_path)
         if transcription:
             print(f"Twilio transcription: {transcription}", flush=True)
@@ -193,12 +238,58 @@ async def _transcribe_audio_chunk(mulaw_payloads: list[str]) -> str:
                 pass
 
 
+def _pcm_rms(pcm_audio: bytes) -> float:
+    if not pcm_audio:
+        return 0.0
+
+    usable = len(pcm_audio) - (len(pcm_audio) % PCM_SAMPLE_WIDTH)
+    if usable <= 0:
+        return 0.0
+
+    samples = array.array("h")
+    samples.frombytes(pcm_audio[:usable])
+    if not samples:
+        return 0.0
+
+    return math.sqrt(sum(sample * sample for sample in samples) / len(samples))
+
+
+def _normalize_for_noise(text: str) -> str:
+    cleaned = re.sub(r"[^\w\s]", " ", text.lower())
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _has_scam_keyword(text: str) -> bool:
+    lowered = text.lower()
+    return any(keyword in lowered for keyword in SCAM_TRANSCRIPT_KEYWORDS)
+
+
+def _is_probably_noise(text: str) -> bool:
+    if _has_scam_keyword(text):
+        return False
+
+    normalized = _normalize_for_noise(text)
+    if not normalized:
+        return True
+
+    if normalized in WHISPER_HALLUCINATIONS:
+        return True
+
+    # A lone short token after silence is almost always a hallucination rather
+    # than a real utterance worth surfacing.
+    words = normalized.split()
+    if len(words) <= 1 and len(normalized) <= 4:
+        return True
+
+    return False
+
+
 def _should_publish_transcription(text: str) -> bool:
     normalized = text.strip().lower()
     if len(normalized.split()) >= MIN_TRANSCRIPT_WORDS:
         return True
 
-    return any(keyword in normalized for keyword in SCAM_TRANSCRIPT_KEYWORDS)
+    return _has_scam_keyword(normalized)
 
 
 async def _transcription_worker(
@@ -206,6 +297,7 @@ async def _transcription_worker(
     caller_state: dict[str, str],
 ) -> None:
     pending_text = ""
+    pending_cycles = 0
 
     while True:
         mulaw_payloads = await audio_queue.get()
@@ -216,12 +308,31 @@ async def _transcription_worker(
         if not transcription:
             continue
 
+        # Drop obvious Whisper silence/hallucination artifacts before they can
+        # accumulate into the pending buffer.
+        if not pending_text and _is_probably_noise(transcription):
+            continue
+
         pending_text = f"{pending_text} {transcription}".strip()
-        if _should_publish_transcription(pending_text):
+        pending_cycles += 1
+
+        # Publish as soon as the fragment is meaningful, or once it has waited
+        # long enough, so the transcript stays close to real time instead of
+        # buffering several utterances together.
+        if (
+            _should_publish_transcription(pending_text)
+            or pending_cycles > MAX_PENDING_FLUSH_CYCLES
+        ):
+            if _is_probably_noise(pending_text):
+                pending_text = ""
+                pending_cycles = 0
+                continue
+
             await _write_transcript(pending_text, caller_state["number"])
             pending_text = ""
+            pending_cycles = 0
 
-    if pending_text and _should_publish_transcription(pending_text):
+    if pending_text and not _is_probably_noise(pending_text):
         await _write_transcript(pending_text, caller_state["number"])
 
 

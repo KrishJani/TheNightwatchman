@@ -7,11 +7,13 @@ import weave
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
-from redis_client import ALERTS_CHANNEL, COACHING_CHANNEL, get_redis_client
+from redis_client import ALERTS_CHANNEL, COACHING_CHANNEL, coaching_key, get_redis_client
 
 
 MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
-RISK_THRESHOLD = 0.6
+# Coach on genuinely risky moments (authority impersonation 0.5, secrecy 0.6,
+# wire/gift-card requests) without firing on low-signal urgency/fear (0.3).
+RISK_THRESHOLD = 0.45
 SYSTEM_PROMPT = (
     "You are a protective assistant helping a vulnerable person on a scam call. "
     "Given the detected tactic, generate one short, calm sentence they can say "
@@ -76,9 +78,10 @@ async def _generate_coaching_tip(alert: dict[str, Any]) -> str:
 
 async def _handle_alert(alert: dict[str, Any]) -> dict[str, Any] | None:
     score = float(alert.get("score", 0))
-    if score <= RISK_THRESHOLD:
+    if score < RISK_THRESHOLD:
         return None
 
+    message_id = alert.get("message_id")
     tactic = str(alert.get("tactic", "UNKNOWN"))
     try:
         tip = await _generate_coaching_tip(alert)
@@ -86,20 +89,30 @@ async def _handle_alert(alert: dict[str, Any]) -> dict[str, Any] | None:
         print(f"Coach LLM error: {error}; using fallback tip", flush=True)
         tip = _fallback_tip(tactic)
 
+    if not tip:
+        tip = _fallback_tip(tactic)
+
     payload = {
         "type": "coaching_tip",
-        "message_id": alert.get("message_id"),
+        "message_id": message_id,
         "tactic": tactic,
         "tip": tip,
     }
 
     redis = get_redis_client()
     try:
+        # Persist the tip so a page refresh mid-call can replay it via the
+        # WebSocket history, then publish it to live listeners.
+        if message_id:
+            await redis.hset(
+                coaching_key(message_id),
+                mapping={"tactic": tactic, "tip": tip},
+            )
         await redis.publish(COACHING_CHANNEL, json.dumps(payload))
     finally:
         await redis.aclose()
 
-    print(f"Coach published tip for {payload['message_id']}: {tip}", flush=True)
+    print(f"Coach published tip for {message_id}: {tip}", flush=True)
     return payload
 
 
