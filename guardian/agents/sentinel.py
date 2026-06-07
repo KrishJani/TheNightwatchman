@@ -8,7 +8,13 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
 from agents.orchestrator import update_risk_score
-from redis_client import AGENTS_GROUP, TRANSCRIPT_STREAM, create_stream, get_redis_client
+from redis_client import (
+    AGENTS_GROUP,
+    TRANSCRIPT_STREAM,
+    create_stream,
+    get_redis_client,
+    search_playbook_match,
+)
 
 
 CONSUMER_NAME = "sentinel"
@@ -169,15 +175,19 @@ async def sentinel_agent(state: dict[str, Any] | None = None) -> dict[str, Any]:
                     classification = _fallback_classification(message)
 
                 classification = _apply_payment_overrides(message, classification)
+                playbook_match = await search_playbook_match(message.get("text", ""))
                 tactic_key = f"guardian:tactic:{message_id}"
+                tactic_fields = {
+                    **classification,
+                    "message_id": message_id,
+                    "processed_at": str(time.time()),
+                }
+                if playbook_match:
+                    tactic_fields["playbook_match"] = playbook_match
 
                 await redis.hset(
                     tactic_key,
-                    mapping={
-                        **classification,
-                        "message_id": message_id,
-                        "processed_at": str(time.time()),
-                    },
+                    mapping=tactic_fields,
                 )
                 await update_risk_score(
                     message_id,
@@ -188,15 +198,17 @@ async def sentinel_agent(state: dict[str, Any] | None = None) -> dict[str, Any]:
                 print(
                     "Sentinel processed "
                     f"{message_id}: {classification['tactic']} "
-                    f"({classification['confidence']})",
+                    f"({classification['confidence']})"
+                    + (f" playbook={playbook_match}" if playbook_match else ""),
                     flush=True,
                 )
-                processed.append(
-                    {
-                        "message_id": message_id,
-                        **classification,
-                    }
-                )
+                result_entry = {
+                    "message_id": message_id,
+                    **classification,
+                }
+                if playbook_match:
+                    result_entry["playbook_match"] = playbook_match
+                processed.append(result_entry)
     finally:
         await redis.aclose()
 

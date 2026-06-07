@@ -11,6 +11,7 @@ from redis_client import (
     ALERTS_CHANNEL,
     COACHING_CHANNEL,
     create_known_scammers_filter,
+    create_playbooks_vset,
     create_risk_timeline,
     create_stream,
     get_redis_client,
@@ -51,6 +52,7 @@ async def lifespan(app: FastAPI):
     await create_stream()
     await create_risk_timeline()
     await create_known_scammers_filter()
+    await create_playbooks_vset()
     sentinel_task = asyncio.create_task(run_sentinel_worker())
     coach_task = asyncio.create_task(run_coach_worker())
     try:

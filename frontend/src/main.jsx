@@ -53,6 +53,7 @@ function App() {
             text: alert.text,
             tactic: alert.tactic,
             score: nextScore,
+            playbookMatch: alert.playbook_match ?? "",
           },
         ].slice(-10),
       );
@@ -116,9 +117,16 @@ function App() {
             utterances.map((utterance) => (
               <article className="utterance" key={utterance.id}>
                 <p>{utterance.text}</p>
-                <span>
-                  {utterance.tactic} · {utterance.score.toFixed(2)}
-                </span>
+                <div className="utterance-meta">
+                  <span>
+                    {utterance.tactic} · {utterance.score.toFixed(2)}
+                  </span>
+                  {utterance.playbookMatch && (
+                    <span className="playbook-tag">
+                      Matches: {utterance.playbookMatch}
+                    </span>
+                  )}
+                </div>
               </article>
             ))
           )}

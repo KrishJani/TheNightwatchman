@@ -51,6 +51,9 @@ async def update_risk_score(
             "score": score,
             "text": utterance_text,
         }
+        playbook_match = tactic_result.get("playbook_match")
+        if playbook_match:
+            alert["playbook_match"] = playbook_match
         await redis.publish(ALERTS_CHANNEL, json.dumps(alert))
     finally:
         await redis.aclose()
