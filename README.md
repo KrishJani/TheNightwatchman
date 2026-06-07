@@ -70,7 +70,7 @@ a Redis Stream; a fleet of independent agent workers consume that stream concurr
 publish their findings back over Pub/Sub, which the frontend renders live over a WebSocket.
 
 <p align="center">
-  <img src="frontend/public/static/diagram-export-6-7-2026-12_38_23-PM.svg" alt="The Nightwatchman system architecture" width="900" />
+  <img src="frontend/public/static/systemdesign.svg" alt="The Nightwatchman system architecture" width="900" />
 </p>
 
 At a glance:
