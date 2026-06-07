@@ -1,0 +1,293 @@
+<style>
+  .direction-grid {
+    display: grid;
+    gap: 18px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    margin-top: 22px;
+  }
+
+  .direction-card {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(247, 250, 252, 0.9));
+    border: 1px solid rgba(34, 60, 80, 0.12);
+    border-radius: 28px;
+    box-shadow: 0 24px 70px rgba(31, 45, 61, 0.12);
+    cursor: pointer;
+    overflow: hidden;
+  }
+
+  .direction-card.selected {
+    outline: 3px solid #0f766e;
+  }
+
+  .mini-browser {
+    aspect-ratio: 1.08;
+    border-bottom: 1px solid rgba(34, 60, 80, 0.1);
+    padding: 16px;
+    position: relative;
+  }
+
+  .mini-nav {
+    align-items: center;
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 20px;
+    position: relative;
+    z-index: 2;
+  }
+
+  .brand-dot {
+    border-radius: 999px;
+    height: 26px;
+    width: 26px;
+  }
+
+  .nav-lines {
+    display: flex;
+    gap: 6px;
+  }
+
+  .nav-lines span {
+    background: rgba(15, 23, 42, 0.18);
+    border-radius: 999px;
+    display: block;
+    height: 6px;
+    width: 26px;
+  }
+
+  .mini-copy {
+    max-width: 76%;
+    position: relative;
+    z-index: 2;
+  }
+
+  .mini-label {
+    border-radius: 999px;
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    margin-bottom: 10px;
+    padding: 6px 9px;
+    text-transform: uppercase;
+  }
+
+  .mini-title {
+    color: #10202a;
+    font-size: 22px;
+    font-weight: 850;
+    letter-spacing: -0.04em;
+    line-height: 0.95;
+    margin-bottom: 10px;
+  }
+
+  .mini-body {
+    color: rgba(15, 23, 42, 0.58);
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  .mini-panel {
+    backdrop-filter: blur(18px);
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    border-radius: 18px;
+    bottom: 14px;
+    box-shadow: 0 20px 50px rgba(15, 23, 42, 0.12);
+    padding: 10px;
+    position: absolute;
+    right: 14px;
+    width: 38%;
+    z-index: 2;
+  }
+
+  .mini-panel-line {
+    background: rgba(15, 23, 42, 0.16);
+    border-radius: 999px;
+    height: 7px;
+    margin: 7px 0;
+  }
+
+  .mini-panel-line.short {
+    width: 62%;
+  }
+
+  .aurora {
+    background:
+      radial-gradient(circle at 18% 22%, rgba(125, 211, 252, 0.55), transparent 28%),
+      radial-gradient(circle at 82% 16%, rgba(167, 243, 208, 0.62), transparent 30%),
+      radial-gradient(circle at 74% 76%, rgba(251, 191, 36, 0.22), transparent 26%),
+      linear-gradient(145deg, #fbfaf6, #e6f4f1 48%, #eef7ff);
+  }
+
+  .aurora::before {
+    background: conic-gradient(from 120deg, transparent, rgba(20, 184, 166, 0.25), transparent, rgba(59, 130, 246, 0.18), transparent);
+    border-radius: 999px;
+    content: "";
+    filter: blur(8px);
+    height: 170px;
+    left: 35%;
+    opacity: 0.9;
+    position: absolute;
+    top: 18%;
+    width: 170px;
+  }
+
+  .heirloom {
+    background:
+      linear-gradient(115deg, rgba(255, 247, 237, 0.96), rgba(239, 246, 255, 0.88)),
+      repeating-linear-gradient(120deg, rgba(15, 23, 42, 0.035) 0 1px, transparent 1px 18px);
+  }
+
+  .heirloom::before,
+  .heirloom::after {
+    border: 1px solid rgba(180, 83, 9, 0.18);
+    border-radius: 999px;
+    content: "";
+    height: 220px;
+    position: absolute;
+    right: -60px;
+    top: -34px;
+    transform: rotate(-24deg);
+    width: 110px;
+  }
+
+  .heirloom::after {
+    height: 180px;
+    left: -50px;
+    right: auto;
+    top: 110px;
+    transform: rotate(34deg);
+    width: 90px;
+  }
+
+  .watchtower {
+    background:
+      radial-gradient(circle at 50% 45%, rgba(56, 189, 248, 0.15), transparent 28%),
+      linear-gradient(145deg, #101827, #172033 46%, #f8fafc 47%, #eef7f4);
+  }
+
+  .watchtower::before {
+    background:
+      linear-gradient(90deg, transparent 49%, rgba(255, 255, 255, 0.38) 50%, transparent 51%),
+      linear-gradient(0deg, transparent 49%, rgba(255, 255, 255, 0.24) 50%, transparent 51%);
+    background-size: 28px 28px;
+    content: "";
+    inset: 0;
+    opacity: 0.45;
+    position: absolute;
+  }
+
+  .direction-body {
+    padding: 18px;
+  }
+
+  .direction-body h3 {
+    margin-bottom: 8px;
+  }
+
+  .direction-body p,
+  .direction-body li {
+    color: rgba(15, 23, 42, 0.64);
+    font-size: 14px;
+    line-height: 1.45;
+  }
+
+  .direction-body ul {
+    margin: 12px 0 0;
+    padding-left: 18px;
+  }
+
+  @media (max-width: 900px) {
+    .direction-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+
+<h2>Premium Calm Family Safety</h2>
+<p class="subtitle">Pick the visual direction that feels closest. These are not generic animated gradients; each one ties the motion to the product idea.</p>
+
+<div class="direction-grid">
+  <div class="direction-card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="mini-browser aurora">
+      <div class="mini-nav">
+        <div class="brand-dot" style="background:#0f766e"></div>
+        <div class="nav-lines"><span></span><span></span><span></span></div>
+      </div>
+      <div class="mini-copy">
+        <div class="mini-label" style="background:rgba(15,118,110,.12);color:#0f766e">The Nightwatchman</div>
+        <div class="mini-title">Your calm guardrail for unknown calls.</div>
+        <div class="mini-body">Live scam detection, gentle coaching, and family alerts without making every call feel like a crisis.</div>
+      </div>
+      <div class="mini-panel" style="background:rgba(255,255,255,.62)">
+        <div class="mini-panel-line short"></div>
+        <div class="mini-panel-line"></div>
+        <div class="mini-panel-line" style="background:rgba(15,118,110,.35)"></div>
+      </div>
+    </div>
+    <div class="direction-body">
+      <h3>A. Living Signal</h3>
+      <p>Soft aurora field generated by “trust signals”: transcript pulses, verification nodes, and family-alert rings drifting behind the page.</p>
+      <ul>
+        <li>Most polished and approachable.</li>
+        <li>Great for light/dark mode parity.</li>
+        <li>Recommended direction.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="direction-card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="mini-browser heirloom">
+      <div class="mini-nav">
+        <div class="brand-dot" style="background:#92400e"></div>
+        <div class="nav-lines"><span></span><span></span><span></span></div>
+      </div>
+      <div class="mini-copy">
+        <div class="mini-label" style="background:rgba(146,64,14,.1);color:#92400e">Family-first protection</div>
+        <div class="mini-title">A trusted voice beside every call.</div>
+        <div class="mini-body">Elegant, editorial, and warmer. The product reads more like premium care than cybersecurity software.</div>
+      </div>
+      <div class="mini-panel" style="background:rgba(255,255,255,.68)">
+        <div class="mini-panel-line short"></div>
+        <div class="mini-panel-line"></div>
+        <div class="mini-panel-line" style="background:rgba(146,64,14,.28)"></div>
+      </div>
+    </div>
+    <div class="direction-body">
+      <h3>B. Heirloom Shield</h3>
+      <p>Background animation uses slow “woven” protective bands, like a premium insurance or health-tech brand with family warmth.</p>
+      <ul>
+        <li>Highest warmth and trust.</li>
+        <li>Less technical, more consumer.</li>
+        <li>May feel too soft for a live AI product.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="direction-card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="mini-browser watchtower">
+      <div class="mini-nav">
+        <div class="brand-dot" style="background:#38bdf8"></div>
+        <div class="nav-lines"><span style="background:rgba(255,255,255,.28)"></span><span style="background:rgba(255,255,255,.28)"></span><span style="background:rgba(255,255,255,.28)"></span></div>
+      </div>
+      <div class="mini-copy">
+        <div class="mini-label" style="background:rgba(56,189,248,.16);color:#bae6fd">Real-time call defense</div>
+        <div class="mini-title" style="color:#f8fafc">Scam defense that stays composed.</div>
+        <div class="mini-body" style="color:rgba(226,232,240,.72)">More command-center energy, balanced by a bright family-safe lower panel.</div>
+      </div>
+      <div class="mini-panel" style="background:rgba(255,255,255,.74)">
+        <div class="mini-panel-line short"></div>
+        <div class="mini-panel-line"></div>
+        <div class="mini-panel-line" style="background:rgba(14,165,233,.36)"></div>
+      </div>
+    </div>
+    <div class="direction-body">
+      <h3>C. Watchtower Glass</h3>
+      <p>Animated radar-like observation grid, but softened with premium glass panels and reassuring family copy.</p>
+      <ul>
+        <li>Most “serious security.”</li>
+        <li>Very distinctive in dark mode.</li>
+        <li>Could drift too close to cyber dashboard.</li>
+      </ul>
+    </div>
+  </div>
+</div>

@@ -1,6 +1,8 @@
 {
+  "type": "module",
   "scripts": {
     "dev": "vite",
+    "test": "node --test src/theme.test.js",
     "build": "vite build",
     "preview": "vite preview"
   },
