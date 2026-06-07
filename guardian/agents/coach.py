@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from typing import Any
@@ -118,7 +119,7 @@ async def coach_agent() -> None:
                 continue
 
             alert = json.loads(message["data"])
-            await _handle_alert(alert)
+            asyncio.create_task(_handle_alert(alert))
     finally:
         await pubsub.unsubscribe(ALERTS_CHANNEL)
         await pubsub.aclose()

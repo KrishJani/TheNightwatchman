@@ -43,6 +43,87 @@ body {
   text-align: center;
 }
 
+.scam-confirmed-banner {
+  align-items: center;
+  background: #991b1b;
+  border-radius: 16px;
+  color: #fee2e2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  justify-content: space-between;
+  margin-bottom: 18px;
+  padding: 16px 20px;
+}
+
+.scam-confirmed-banner p {
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.clean-call-banner {
+  background: rgba(34, 197, 94, 0.18);
+  border: 1px solid rgba(134, 239, 172, 0.35);
+  border-radius: 16px;
+  color: #bbf7d0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin-bottom: 18px;
+  padding: 16px 20px;
+  text-align: center;
+}
+
+.error-banner {
+  background: rgba(239, 68, 68, 0.18);
+  border: 1px solid rgba(252, 165, 165, 0.35);
+  border-radius: 16px;
+  color: #fecaca;
+  font-size: 1rem;
+  font-weight: 700;
+  margin-bottom: 18px;
+  padding: 16px 20px;
+  text-align: center;
+}
+
+.call-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}
+
+.start-call-button,
+.end-call-button,
+.download-button {
+  border: none;
+  border-radius: 999px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 700;
+  padding: 12px 20px;
+  text-decoration: none;
+}
+
+.start-call-button {
+  background: #2563eb;
+}
+
+.end-call-button {
+  background: #ef4444;
+}
+
+.end-call-button:disabled,
+.start-call-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.download-button {
+  background: #fee2e2;
+  color: #991b1b;
+  display: inline-block;
+}
+
 .hero,
 .risk-header {
   align-items: center;

@@ -236,3 +236,28 @@ async def search_playbook_match(text: str) -> str | None:
         return PLAYBOOK_NAME_BY_KEY.get(matched_key, matched_key.replace("_", " "))
     finally:
         await redis.aclose()
+
+
+async def cleanup_call_data(
+    message_ids: list[str],
+    risk_timestamps_ms: list[int],
+) -> None:
+    redis = get_redis_client()
+    try:
+        ids_to_delete = list(message_ids)
+        if not ids_to_delete:
+            stream_entries = await redis.xrange(TRANSCRIPT_STREAM, min="-", max="+")
+            ids_to_delete = [entry_id for entry_id, _ in stream_entries]
+
+        for message_id in ids_to_delete:
+            await redis.xdel(TRANSCRIPT_STREAM, message_id)
+            await redis.delete(f"guardian:tactic:{message_id}")
+
+        if risk_timestamps_ms:
+            await redis.ts().delete(
+                RISK_TIMELINE,
+                min(risk_timestamps_ms),
+                max(risk_timestamps_ms),
+            )
+    finally:
+        await redis.aclose()

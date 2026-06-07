@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import "./styles.css";
 
 const WEBSOCKET_URL = "ws://localhost:8000/ws";
+const API_BASE_URL = "http://localhost:8000";
 
 function getRiskColor(score) {
   if (score > 0.7) {
@@ -16,12 +17,76 @@ function getRiskColor(score) {
   return "#22c55e";
 }
 
+function buildUtterance(alert) {
+  return {
+    id: alert.message_id,
+    text: alert.text,
+    tactic: alert.tactic,
+    score: Number(alert.score ?? 0),
+    playbookMatch: alert.playbook_match ?? "",
+  };
+}
+
 function App() {
   const [connectionStatus, setConnectionStatus] = useState("connecting");
   const [knownScammerMessage, setKnownScammerMessage] = useState("");
   const [coachingTip, setCoachingTip] = useState("");
   const [utterances, setUtterances] = useState([]);
   const [riskScore, setRiskScore] = useState(0);
+  const [callOutcome, setCallOutcome] = useState(null);
+  const [isStartingCall, setIsStartingCall] = useState(false);
+  const [isEndingCall, setIsEndingCall] = useState(false);
+
+  function applyAlert(alert) {
+    const nextScore = Number(alert.score ?? 0);
+    setRiskScore((current) => Math.max(current, nextScore));
+    setUtterances((current) => {
+      const utterance = buildUtterance(alert);
+      const withoutDuplicate = current.filter((item) => item.id !== utterance.id);
+      return [...withoutDuplicate, utterance].slice(-10);
+    });
+  }
+
+  async function handleStartSimulation() {
+    setIsStartingCall(true);
+    setCallOutcome(null);
+    setCoachingTip("");
+    setUtterances([]);
+    setRiskScore(0);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/simulate`, { method: "POST" });
+      if (!response.ok) {
+        throw new Error("Simulation failed to start");
+      }
+    } catch {
+      setCallOutcome({
+        status: "error",
+        message: "Could not start the simulation. Is the backend running?",
+      });
+    } finally {
+      setIsStartingCall(false);
+    }
+  }
+
+  async function handleEndCall() {
+    setIsEndingCall(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/end-call`, { method: "POST" });
+      if (!response.ok) {
+        throw new Error("End call failed");
+      }
+      const result = await response.json();
+      setCallOutcome(result);
+    } catch {
+      setCallOutcome({
+        status: "error",
+        message: "Could not finalize the call. Please try again.",
+      });
+    } finally {
+      setIsEndingCall(false);
+    }
+  }
 
   useEffect(() => {
     const socket = new WebSocket(WEBSOCKET_URL);
@@ -31,7 +96,13 @@ function App() {
     });
 
     socket.addEventListener("message", (event) => {
-      const alert = JSON.parse(event.data);
+      let alert;
+      try {
+        alert = JSON.parse(event.data);
+      } catch {
+        return;
+      }
+
       if (alert.type === "known_scammer") {
         setKnownScammerMessage(alert.message);
         return;
@@ -42,21 +113,9 @@ function App() {
         return;
       }
 
-      const nextScore = Number(alert.score ?? 0);
-
-      setRiskScore(nextScore);
-      setUtterances((current) =>
-        [
-          ...current,
-          {
-            id: alert.message_id,
-            text: alert.text,
-            tactic: alert.tactic,
-            score: nextScore,
-            playbookMatch: alert.playbook_match ?? "",
-          },
-        ].slice(-10),
-      );
+      if (alert.message_id) {
+        applyAlert(alert);
+      }
     });
 
     socket.addEventListener("close", () => {
@@ -81,12 +140,56 @@ function App() {
         <section className="known-scammer-banner">{knownScammerMessage}</section>
       )}
 
+      {callOutcome?.status === "scam" && (
+        <section className="scam-confirmed-banner">
+          <p>{callOutcome.message || "Scam confirmed. Download your incident report."}</p>
+          <a
+            className="download-button"
+            href={`${API_BASE_URL}/download-report/${callOutcome.timestamp}`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Download report
+          </a>
+        </section>
+      )}
+
+      {callOutcome?.status === "clean" && (
+        <section className="clean-call-banner">
+          {callOutcome.message ||
+            "No scam detected. Your conversation was private and has been deleted."}
+        </section>
+      )}
+
+      {callOutcome?.status === "error" && (
+        <section className="error-banner">{callOutcome.message}</section>
+      )}
+
       <section className="panel hero">
         <div>
           <p className="eyebrow">Guardian</p>
           <h1>Real-time scam call defense</h1>
         </div>
         <span className={`status ${connectionStatus}`}>{connectionStatus}</span>
+      </section>
+
+      <section className="panel call-actions">
+        <button
+          className="start-call-button"
+          disabled={isStartingCall || connectionStatus !== "connected"}
+          onClick={handleStartSimulation}
+          type="button"
+        >
+          {isStartingCall ? "Starting call..." : "Start simulation"}
+        </button>
+        <button
+          className="end-call-button"
+          disabled={isEndingCall || Boolean(callOutcome)}
+          onClick={handleEndCall}
+          type="button"
+        >
+          {isEndingCall ? "Ending call..." : "End call"}
+        </button>
       </section>
 
       <section className="panel">
@@ -112,7 +215,7 @@ function App() {
         <h2>Transcript</h2>
         <div className="transcript">
           {utterances.length === 0 ? (
-            <p className="empty">Waiting for call activity...</p>
+            <p className="empty">Click Start simulation to begin a demo call...</p>
           ) : (
             utterances.map((utterance) => (
               <article className="utterance" key={utterance.id}>
