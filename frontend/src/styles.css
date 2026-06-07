@@ -359,6 +359,10 @@ p {
   padding: 24px 0;
 }
 
+.how-it-works-section {
+  padding: 24px 0;
+}
+
 .architecture-card {
   align-items: flex-start;
   display: flex;
@@ -382,6 +386,18 @@ p {
   line-height: 1.7;
   margin: 0;
   max-width: 620px;
+}
+
+.latency-diagram-card {
+  overflow: hidden;
+  padding: clamp(16px, 2.5vw, 28px);
+}
+
+.latency-diagram {
+  border-radius: 24px;
+  display: block;
+  height: auto;
+  width: 100%;
 }
 
 .redis-intelligence-section {

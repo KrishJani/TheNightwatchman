@@ -1045,6 +1045,13 @@ function App() {
           >
             Redis Intelligence
           </button>
+          <button
+            type="button"
+            className={`nav-tab ${activeTab === "how-it-works" ? "active" : ""}`}
+            onClick={() => setActiveTab("how-it-works")}
+          >
+            How it works
+          </button>
         </div>
         <button className="theme-toggle" onClick={handleToggleTheme} type="button">
           <span>{theme === "dark" ? "Dark" : "Light"}</span>
@@ -1079,6 +1086,16 @@ function App() {
           error={redisIntelligenceError}
           loading={isRedisIntelligenceLoading}
         />
+      ) : activeTab === "how-it-works" ? (
+        <section className="how-it-works-section">
+          <div className="latency-diagram-card section-panel">
+            <img
+              className="latency-diagram"
+              src="/static/latency-diagram.png"
+              alt="Latency diagram showing how The Nightwatchman processes call audio"
+            />
+          </div>
+        </section>
       ) : (
         <>
       <section className="hero-section" id="top">
