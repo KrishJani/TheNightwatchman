@@ -1,7 +1,8 @@
 import asyncio
+import json
 import time
 
-from redis_client import TRANSCRIPT_STREAM, create_stream, get_redis_client
+from redis_client import TRANSCRIPT_CHANNEL, TRANSCRIPT_STREAM, create_stream, get_redis_client
 
 
 SIMULATED_CALLER_NUMBER = "14155551234"
@@ -25,14 +26,29 @@ async def simulate_call(script: list[str]) -> None:
     redis = get_redis_client()
     try:
         for index, utterance in enumerate(script):
-            await redis.xadd(
+            speaker = "caller" if index % 2 == 0 else "victim"
+            timestamp = time.time()
+            message_id = await redis.xadd(
                 TRANSCRIPT_STREAM,
                 {
                     "caller_number": SIMULATED_CALLER_NUMBER,
-                    "speaker": "caller" if index % 2 == 0 else "victim",
+                    "speaker": speaker,
                     "text": utterance,
-                    "timestamp": time.time(),
+                    "timestamp": timestamp,
                 },
+            )
+            await redis.publish(
+                TRANSCRIPT_CHANNEL,
+                json.dumps(
+                    {
+                        "type": "transcript",
+                        "message_id": message_id,
+                        "caller_number": SIMULATED_CALLER_NUMBER,
+                        "speaker": speaker,
+                        "text": utterance,
+                        "timestamp": timestamp,
+                    }
+                ),
             )
             await asyncio.sleep(1.5)
     finally:

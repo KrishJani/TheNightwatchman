@@ -177,6 +177,10 @@ async def sentinel_agent(state: dict[str, Any] | None = None) -> dict[str, Any]:
 
         for _, messages in streams:
             for message_id, message in messages:
+                if message.get("speaker", "caller") != "caller":
+                    await redis.xack(TRANSCRIPT_STREAM, AGENTS_GROUP, message_id)
+                    continue
+
                 try:
                     classification = await _classify_utterance(message)
                 except Exception as error:

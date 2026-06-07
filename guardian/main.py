@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
@@ -15,7 +15,13 @@ from agents.scribe import finalize_call, incident_log, scribe_agent
 from agents.sentinel import sentinel_agent
 from agents.verifier import verifier_agent
 from ingestion.simulator import SAMPLE_SCRIPT, SIMULATED_CALLER_NUMBER, simulate_call
-from ingestion.twilio_stream import handle_twilio_incoming, handle_twilio_media
+from ingestion.twilio_stream import (
+    handle_twilio_incoming,
+    handle_twilio_media,
+    is_twilio_configured,
+    start_twilio_outbound_call,
+)
+from ingestion.user_audio import transcribe_user_upload
 from redis_client import (
     ALLY_ALERT_KEY,
     ALLY_CHANNEL,
@@ -36,6 +42,7 @@ from redis_client import (
     is_known_scammer,
     set_call_active,
 )
+from redis_intelligence import build_redis_intelligence_snapshot
 
 
 load_dotenv()
@@ -146,6 +153,15 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/redis-intelligence")
+async def redis_intelligence():
+    redis = get_redis_client()
+    try:
+        return await build_redis_intelligence_snapshot(redis)
+    finally:
+        await redis.aclose()
+
+
 @app.post("/simulate")
 async def simulate(background_tasks: BackgroundTasks):
     incident_log.reset()
@@ -153,6 +169,29 @@ async def simulate(background_tasks: BackgroundTasks):
     await set_call_active()
     background_tasks.add_task(simulate_call, SAMPLE_SCRIPT)
     return {"status": "started", "entries": len(SAMPLE_SCRIPT)}
+
+
+@app.post("/transcribe-user")
+async def transcribe_user(audio: UploadFile = File(...)):
+    return await transcribe_user_upload(audio)
+
+
+@app.get("/twilio-status")
+async def twilio_status():
+    return {"configured": is_twilio_configured()}
+
+
+@app.post("/start-twilio-call")
+async def start_twilio_call():
+    if not is_twilio_configured():
+        raise HTTPException(status_code=503, detail="Twilio is not configured")
+
+    try:
+        return await start_twilio_outbound_call()
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
 
 
 @app.post("/reset-call")
@@ -168,6 +207,7 @@ async def _send_call_history(websocket: WebSocket) -> None:
     try:
         entries = await redis.xrange(TRANSCRIPT_STREAM, min="-", max="+")
         for message_id, fields in entries:
+            timestamp = fields.get("timestamp")
             await websocket.send_text(
                 json.dumps(
                     {
@@ -176,6 +216,7 @@ async def _send_call_history(websocket: WebSocket) -> None:
                         "caller_number": fields.get("caller_number", ""),
                         "speaker": fields.get("speaker", "caller"),
                         "text": fields.get("text", ""),
+                        "timestamp": float(timestamp) if timestamp else None,
                     }
                 )
             )

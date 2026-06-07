@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 
 from openai import AsyncOpenAI
@@ -17,6 +18,8 @@ VERIFICATION_CHANNEL = "guardian:verification"
 ALLY_CHANNEL = "guardian:ally"
 ALLY_ALERT_KEY = "guardian:ally_alert"
 CALL_ACTIVE_KEY = "guardian:call_active"
+VICTIM_RECENT_KEY = "guardian:victim_recent"
+VICTIM_RECENT_TTL_SECONDS = 45
 KNOWN_SCAMMERS_FILTER = "guardian:known_scammers"
 PLAYBOOKS_VSET = "guardian:playbooks"
 EMBEDDING_MODEL = "text-embedding-3-small"
@@ -80,6 +83,99 @@ def get_redis_client() -> Redis:
         password=os.getenv("REDIS_PASSWORD") or None,
         decode_responses=True,
     )
+
+
+def normalize_transcript_text(text: str) -> str:
+    cleaned = re.sub(r"[^\w\s]", " ", text.lower())
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def transcript_texts_overlap(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    if left == right or left in right or right in left:
+        return True
+
+    words_left = set(left.split())
+    words_right = set(right.split())
+    if not words_left or not words_right:
+        return False
+
+    return len(words_left & words_right) / len(words_left | words_right) >= 0.6
+
+
+async def record_victim_transcript_text(text: str) -> None:
+    normalized = normalize_transcript_text(text)
+    if not normalized:
+        return
+
+    redis = get_redis_client()
+    try:
+        now = time.time()
+        await redis.zadd(VICTIM_RECENT_KEY, {normalized: now})
+        cutoff = now - VICTIM_RECENT_TTL_SECONDS
+        await redis.zremrangebyscore(VICTIM_RECENT_KEY, 0, cutoff)
+    finally:
+        await redis.aclose()
+
+
+async def matches_recent_victim_transcript(text: str) -> bool:
+    normalized = normalize_transcript_text(text)
+    if not normalized:
+        return False
+
+    redis = get_redis_client()
+    try:
+        cutoff = time.time() - VICTIM_RECENT_TTL_SECONDS
+        recent_entries = await redis.zrangebyscore(VICTIM_RECENT_KEY, cutoff, "+inf")
+        for entry in recent_entries:
+            victim_text = entry.decode() if isinstance(entry, bytes) else str(entry)
+            if transcript_texts_overlap(normalized, victim_text):
+                return True
+        return False
+    finally:
+        await redis.aclose()
+
+
+async def retract_caller_duplicates(text: str) -> list[str]:
+    normalized = normalize_transcript_text(text)
+    if not normalized:
+        return []
+
+    redis = get_redis_client()
+    retracted_ids: list[str] = []
+    try:
+        entries = await redis.xrevrange(TRANSCRIPT_STREAM, max="+", min="-", count=30)
+        for message_id, fields in entries:
+            if fields.get("speaker", "caller") != "caller":
+                continue
+
+            caller_text = normalize_transcript_text(fields.get("text", ""))
+            if not transcript_texts_overlap(normalized, caller_text):
+                continue
+
+            await redis.xdel(TRANSCRIPT_STREAM, message_id)
+            await redis.delete(f"guardian:tactic:{message_id}")
+            await redis.delete(f"guardian:verification:{message_id}")
+            await redis.delete(coaching_key(message_id))
+            await redis.publish(
+                TRANSCRIPT_CHANNEL,
+                json.dumps(
+                    {
+                        "type": "transcript_retract",
+                        "message_id": message_id,
+                    }
+                ),
+            )
+            retracted_ids.append(message_id)
+            print(
+                f"Retracted duplicate caller transcript {message_id}: {fields.get('text', '')}",
+                flush=True,
+            )
+    finally:
+        await redis.aclose()
+
+    return retracted_ids
 
 
 def coaching_key(message_id: str) -> str:
@@ -291,6 +387,7 @@ async def cleanup_call_data(
 
         await redis.delete(ALLY_ALERT_KEY)
         await redis.delete(CALL_ACTIVE_KEY)
+        await redis.delete(VICTIM_RECENT_KEY)
 
         # Always clear the full risk timeline so a finished call cannot leak
         # stale high-risk points into the next call's ally/risk evaluation.

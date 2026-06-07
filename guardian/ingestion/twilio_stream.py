@@ -15,9 +15,16 @@ from dotenv import load_dotenv
 from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 from openai import AsyncOpenAI
+from twilio.rest import Client
 from twilio.twiml.voice_response import Start, VoiceResponse
 
-from redis_client import TRANSCRIPT_CHANNEL, TRANSCRIPT_STREAM, create_stream, get_redis_client
+from redis_client import (
+    TRANSCRIPT_CHANNEL,
+    TRANSCRIPT_STREAM,
+    create_stream,
+    get_redis_client,
+    matches_recent_victim_transcript,
+)
 
 try:
     import audioop
@@ -30,6 +37,7 @@ load_dotenv()
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER", "")
+TARGET_PHONE_NUMBER = os.getenv("TARGET_PHONE_NUMBER", "")
 WHISPER_MODEL = "whisper-1"
 # Lower flush interval => speech reaches the console sooner. ~2s still gives
 # Whisper enough audio for a usable transcription.
@@ -88,7 +96,11 @@ WHISPER_HALLUCINATIONS = {
 }
 
 
-def _get_media_ws_url() -> str:
+def is_twilio_configured() -> bool:
+    return bool(TWILIO_PHONE_NUMBER.strip())
+
+
+def _get_ngrok_host() -> str:
     load_dotenv(override=True)
     configured_ngrok_url = os.getenv("NGROK_URL", "")
     ngrok_url = configured_ngrok_url.strip().rstrip("/")
@@ -100,7 +112,15 @@ def _get_media_ws_url() -> str:
     if not host:
         raise ValueError(f"Invalid NGROK_URL: {configured_ngrok_url}")
 
-    return f"wss://{host}/twilio/media"
+    return host
+
+
+def _get_twilio_webhook_base() -> str:
+    return f"https://{_get_ngrok_host()}"
+
+
+def _get_media_ws_url() -> str:
+    return f"wss://{_get_ngrok_host()}/twilio/media"
 
 
 def build_incoming_twiml() -> str:
@@ -129,6 +149,53 @@ async def handle_twilio_incoming() -> Response:
         print("Twilio incoming call fallback TwiML:", flush=True)
         print(twiml, flush=True)
         return Response(content=twiml, media_type="application/xml")
+
+
+async def start_twilio_outbound_call() -> dict[str, str]:
+    load_dotenv(override=True)
+
+    if not is_twilio_configured():
+        raise ValueError("TWILIO_PHONE_NUMBER is not set")
+
+    account_sid = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
+    from_number = TWILIO_PHONE_NUMBER.strip()
+    to_number = os.getenv("TARGET_PHONE_NUMBER", "").strip()
+
+    missing = [
+        name
+        for name, value in [
+            ("TWILIO_ACCOUNT_SID", account_sid),
+            ("TWILIO_AUTH_TOKEN", auth_token),
+            ("TARGET_PHONE_NUMBER", to_number),
+            ("NGROK_URL", os.getenv("NGROK_URL", "").strip()),
+        ]
+        if not value
+    ]
+    if missing:
+        raise ValueError(f"Missing required Twilio settings: {', '.join(missing)}")
+
+    twiml_url = f"{_get_twilio_webhook_base()}/twilio/incoming"
+    client = Client(account_sid, auth_token)
+
+    def _create_call() -> object:
+        return client.calls.create(
+            to=to_number,
+            from_=from_number,
+            url=twiml_url,
+        )
+
+    call = await asyncio.to_thread(_create_call)
+    print(
+        f"Twilio outbound call started {call.sid}: {from_number} -> {to_number}",
+        flush=True,
+    )
+    return {
+        "status": "calling",
+        "call_sid": str(call.sid),
+        "to": to_number,
+        "from": from_number,
+    }
 
 
 def _get_openai_client() -> AsyncOpenAI:
@@ -328,12 +395,22 @@ async def _transcription_worker(
                 pending_cycles = 0
                 continue
 
+            if await matches_recent_victim_transcript(pending_text):
+                print(
+                    f"Skipping Twilio transcript (matches victim mic): {pending_text}",
+                    flush=True,
+                )
+                pending_text = ""
+                pending_cycles = 0
+                continue
+
             await _write_transcript(pending_text, caller_state["number"])
             pending_text = ""
             pending_cycles = 0
 
     if pending_text and not _is_probably_noise(pending_text):
-        await _write_transcript(pending_text, caller_state["number"])
+        if not await matches_recent_victim_transcript(pending_text):
+            await _write_transcript(pending_text, caller_state["number"])
 
 
 def _caller_number_from_start(message: dict[str, object]) -> str:

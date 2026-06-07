@@ -117,6 +117,8 @@ function buildUtterance(alert) {
   return {
     id: alert.message_id,
     text: alert.text,
+    speaker: alert.speaker ?? "caller",
+    timestamp: alert.timestamp ?? Date.now() / 1000,
     tactic: alert.tactic ?? "ANALYZING",
     score: Number(alert.score ?? 0),
     playbookMatch: alert.playbook_match ?? "",
@@ -153,6 +155,353 @@ function getVerificationTag(verdict) {
   return null;
 }
 
+function formatLabel(value) {
+  return String(value ?? "")
+    .toLowerCase()
+    .split("_")
+    .join(" ")
+    .replace(/^\w/, (character) => character.toUpperCase());
+}
+
+function formatTimestamp(timestamp) {
+  if (!timestamp) {
+    return "";
+  }
+
+  const date = new Date(Number(timestamp) * 1000);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function formatPercent(value) {
+  return `${Math.round(Number(value ?? 0) * 100)}%`;
+}
+
+function RedisKey({ children }) {
+  return <code className="redis-key">{children}</code>;
+}
+
+function RedisCard({ title, subtitle, redisKey, variant = "", children }) {
+  return (
+    <article className={`redis-card ${variant}`}>
+      <div className="redis-card-heading">
+        <div>
+          <h2>{title}</h2>
+          <p>{subtitle}</p>
+        </div>
+        {redisKey && <RedisKey>{redisKey}</RedisKey>}
+      </div>
+      {children}
+    </article>
+  );
+}
+
+function MetricRow({ label, value }) {
+  return (
+    <div className="redis-metric-row">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function RedisBadge({ tone = "neutral", children }) {
+  return <span className={`redis-badge ${tone}`}>{children}</span>;
+}
+
+function MiniBar({ value, max, danger = false }) {
+  const width = max > 0 ? Math.max((Number(value) / max) * 100, 4) : 0;
+  return (
+    <span className="redis-mini-bar">
+      <span
+        className={danger ? "danger" : ""}
+        style={{ width: `${Math.min(width, 100)}%` }}
+      />
+    </span>
+  );
+}
+
+function RiskTimelineChart({ points }) {
+  const chartPoints = points ?? [];
+  const polyline = chartPoints
+    .map((point, index) => {
+      const x = chartPoints.length === 1 ? 50 : (index / (chartPoints.length - 1)) * 100;
+      const y = 100 - Math.min(Math.max(Number(point.score ?? 0), 0), 1) * 100;
+      return `${x},${y}`;
+    })
+    .join(" ");
+
+  return (
+    <div className="redis-chart-frame">
+      {chartPoints.length > 0 ? (
+        <svg className="risk-timeline-chart" viewBox="0 0 100 100" preserveAspectRatio="none">
+          <line className="danger-threshold" x1="0" x2="100" y1="30" y2="30" />
+          <polyline points={polyline} />
+        </svg>
+      ) : (
+        <p className="redis-empty">Waiting for risk timeline points.</p>
+      )}
+      <div className="chart-axis-labels">
+        <span>0</span>
+        <span>1.0</span>
+      </div>
+    </div>
+  );
+}
+
+function RedisIntelligenceDashboard({ data, error, loading }) {
+  if (loading && !data) {
+    return (
+      <section className="redis-intelligence-section">
+        <div className="redis-dashboard-header">
+          <p className="eyebrow">Redis Intelligence</p>
+          <h1>Loading live Redis services...</h1>
+        </div>
+      </section>
+    );
+  }
+
+  if (!data) {
+    return (
+      <section className="redis-intelligence-section">
+        <div className="redis-dashboard-header">
+          <p className="eyebrow">Redis Intelligence</p>
+          <h1>Redis service telemetry is unavailable.</h1>
+          {error && <p className="redis-error">{error}</p>}
+        </div>
+      </section>
+    );
+  }
+
+  const topKMax = Math.max(...data.top_k.tactics.map((item) => item.count), 1);
+  const phraseMax = Math.max(...data.count_min.phrases.map((item) => item.count), 1);
+  const hitRate = Number(data.langcache.hit_rate_pct ?? 0);
+  const latestEntry =
+    data.streams.last_entry_ms_ago === null
+      ? "No stream entries"
+      : `${data.streams.last_entry_ms_ago} ms ago`;
+
+  return (
+    <section className="redis-intelligence-section">
+      <div className="redis-dashboard-header">
+        <div>
+          <p className="eyebrow">Redis Intelligence</p>
+          <h1>What Redis is storing for this call.</h1>
+          <p>
+            Live Redis keys, probabilistic structures, streams, semantic indexes,
+            and cache state behind the current Guardian call.
+          </p>
+        </div>
+        <RedisBadge tone={error ? "danger" : "success"}>
+          {error ? "Refresh error" : "Auto-refreshing every 2s"}
+        </RedisBadge>
+      </div>
+
+      <div className="redis-summary-strip" aria-label="Redis live summary">
+        <div>
+          <span>Stream length</span>
+          <strong>{data.streams.total_messages}</strong>
+          <RedisKey>guardian:transcript</RedisKey>
+        </div>
+        <div>
+          <span>Latest entry</span>
+          <strong>{latestEntry}</strong>
+          <RedisKey>{data.hashes.last_message_id || "pending"}</RedisKey>
+        </div>
+        <div>
+          <span>Last tactic hash</span>
+          <strong>{formatLabel(data.hashes.tactic)}</strong>
+          <RedisKey>guardian:tactic:{"{last_id}"}</RedisKey>
+        </div>
+        <div>
+          <span>Risk percentile</span>
+          <strong>{data.tdigest.percentile}th</strong>
+          <RedisKey>tdigest:risk_distribution</RedisKey>
+        </div>
+      </div>
+
+      <div className="redis-section-heading">
+        <p className="eyebrow">Live wired data</p>
+        <h2>Current call backbone</h2>
+      </div>
+      <div className="redis-card-grid">
+        <RedisCard
+          title="TimeSeries — Live Risk Timeline"
+          subtitle="Stores one risk score per utterance and reads the last 10 points."
+          redisKey="guardian:risk_timeline"
+          variant="primary"
+        >
+          <RiskTimelineChart points={data.timeseries.points} />
+        </RedisCard>
+
+        <RedisCard title="Streams" subtitle="Stores the transcript as the append-only call event log." redisKey="guardian:transcript" variant="primary">
+          <MetricRow label="Total messages" value={data.streams.total_messages} />
+          <MetricRow label="Last entry" value={latestEntry} />
+          <MetricRow label="Pending messages" value={data.streams.pending_messages} />
+          <div className="redis-pill-row">
+            {data.streams.consumer_groups.map((group) => (
+              <RedisBadge tone="success" key={group}>
+                {group}
+              </RedisBadge>
+            ))}
+          </div>
+        </RedisCard>
+
+        <RedisCard title="Hashes — Agent Results" subtitle="Stores Sentinel output for the latest utterance." redisKey="guardian:tactic:{last_id}" variant="primary">
+          <MetricRow label="Message ID" value={data.hashes.last_message_id || "No stream entry yet"} />
+          <div className="redis-metric-row">
+            <span>Tactic</span>
+            <RedisBadge tone={data.hashes.tactic === "NONE" ? "neutral" : "danger"}>
+              {formatLabel(data.hashes.tactic)}
+            </RedisBadge>
+          </div>
+          <div className="redis-progress-field">
+            <MetricRow label="Confidence" value={formatPercent(data.hashes.confidence)} />
+            <MiniBar value={data.hashes.confidence} max={1} danger={data.hashes.confidence > 0.7} />
+          </div>
+          <MetricRow label="Verified" value={data.hashes.verified ? "true" : "false"} />
+          <MetricRow label="Playbook match" value={data.hashes.playbook_match} />
+        </RedisCard>
+      </div>
+
+      <div className="redis-section-heading">
+        <p className="eyebrow">Redis capability layer</p>
+        <h2>Specialized structures powering the call analysis</h2>
+      </div>
+      <div className="redis-card-grid">
+        <RedisCard title="Bloom Filter" subtitle="Checks whether the caller appears in the known scammer set." redisKey="guardian:known_scammers">
+          <div className="redis-hero-metric">
+            <span>{data.bloom_filter.caller_number}</span>
+            <RedisBadge tone={data.bloom_filter.result === "HIT" ? "success" : "danger"}>
+              {data.bloom_filter.result}
+            </RedisBadge>
+          </div>
+          <MetricRow label="Lookup latency" value={`${data.bloom_filter.latency_us} us`} />
+          <MetricRow
+            label="Configuration"
+            value={`${data.bloom_filter.filter_size.toLocaleString()} capacity / ${data.bloom_filter.error_rate} error rate`}
+          />
+        </RedisCard>
+
+        <RedisCard
+          title="Top-K — Tactic Leaderboard"
+          subtitle="Maintains the highest-frequency manipulation tactics for this caller."
+          redisKey="topk:tactics"
+        >
+          <div className="redis-bar-list">
+            {data.top_k.tactics.map((item, index) => (
+              <div className="redis-bar-row" key={item.tactic}>
+                <span>{formatLabel(item.tactic)}</span>
+                <MiniBar value={item.count} max={topKMax} danger={index === 0} />
+                <strong>{item.count}</strong>
+              </div>
+            ))}
+          </div>
+        </RedisCard>
+
+        <RedisCard
+          title="Count-Min Sketch — Phrase Frequency"
+          subtitle="Estimates trigger phrase counts without storing every phrase occurrence."
+          redisKey="cms:trigger_phrases"
+        >
+          <div className="redis-table">
+            {data.count_min.phrases.map((item) => (
+              <div className="redis-table-row" key={item.phrase}>
+                <span>{item.phrase}</span>
+                <strong>{item.count}</strong>
+                <MiniBar value={item.count} max={phraseMax} />
+              </div>
+            ))}
+          </div>
+        </RedisCard>
+
+        <RedisCard
+          title="t-digest — Risk Distribution"
+          subtitle="Compares this call's risk against historical call scores."
+          redisKey="tdigest:risk_distribution"
+        >
+          <div className="redis-percentile">{data.tdigest.percentile}th percentile</div>
+          <p className="redis-muted">{data.tdigest.label}</p>
+          <div className="redis-stat-grid">
+            <MetricRow label="p50" value={data.tdigest.p50} />
+            <MetricRow label="p90" value={data.tdigest.p90} />
+            <MetricRow label="p99" value={data.tdigest.p99} />
+          </div>
+        </RedisCard>
+
+        <RedisCard
+          title="Vector Sets — Playbook Match"
+          subtitle="Matches utterances to scam playbooks with vector search and keyword ranking."
+          redisKey="guardian:playbooks"
+        >
+          <blockquote>&ldquo;{data.vector_search.utterance}&rdquo;</blockquote>
+          <MetricRow label="Matched playbook" value={data.vector_search.matched_playbook} />
+          <MetricRow label="Similarity" value={formatPercent(data.vector_search.similarity_score)} />
+          <MetricRow label="Rank method" value={data.vector_search.rank_method} />
+          <MetricRow label="Latency" value={`${data.vector_search.latency_ms} ms`} />
+        </RedisCard>
+
+        <RedisCard title="LangCache — Semantic Cache" subtitle="Reuses semantically similar LLM responses instead of recomputing them." redisKey="langcache:coach">
+          <div className="redis-cache-layout">
+            <div className="redis-donut" style={{ "--hit-rate": `${hitRate}%` }}>
+              <span>{hitRate}%</span>
+            </div>
+            <div>
+              <p className="redis-muted">{data.langcache.last_hit}</p>
+              <MetricRow label="Requests" value={data.langcache.total_requests} />
+              <MetricRow label="Cache hits" value={data.langcache.cache_hits} />
+            </div>
+          </div>
+          <MetricRow
+            label="Hit vs miss latency"
+            value={`${data.langcache.avg_hit_latency_ms} ms / ${data.langcache.avg_miss_latency_ms} ms`}
+          />
+        </RedisCard>
+
+        <RedisCard title="Agent Memory" subtitle="Persists caller-specific context across separate calls." redisKey="memory:caller:{number}">
+          <MetricRow label="Caller" value={data.agent_memory.caller_number} />
+          <MetricRow label="Times seen" value={data.agent_memory.times_seen} />
+          <MetricRow label="Last scam type" value={data.agent_memory.last_scam_type} />
+          <div className="redis-pill-row">
+            {data.agent_memory.known_contacts.map((contact) => (
+              <RedisBadge key={contact}>{contact}</RedisBadge>
+            ))}
+          </div>
+          <p className="redis-muted">{data.agent_memory.notes}</p>
+        </RedisCard>
+
+        <RedisCard title="Pub/Sub — Alert Channel" subtitle="Broadcasts real-time tactic alerts to connected dashboard clients." redisKey="guardian:alerts">
+          <MetricRow label="Channel" value={data.pubsub.channel} />
+          <MetricRow label="Messages published" value={data.pubsub.messages_published} />
+          <pre className="redis-json">{JSON.stringify(data.pubsub.last_message, null, 2)}</pre>
+        </RedisCard>
+
+        <RedisCard
+          title="RDI — Redis Data Integration"
+          subtitle="Syncs external scammer blocklist records into Redis."
+          redisKey="rdi:scammer_blocklist"
+        >
+          <MetricRow label="Source" value={data.rdi.source} />
+          <div className="redis-metric-row">
+            <span>Status</span>
+            <RedisBadge tone="success">{data.rdi.status.toUpperCase()}</RedisBadge>
+          </div>
+          <MetricRow label="Last sync" value={data.rdi.last_sync} />
+          <MetricRow label="Records synced" value={data.rdi.records_synced} />
+          <MetricRow label="Mode" value={data.rdi.mode} />
+        </RedisCard>
+      </div>
+    </section>
+  );
+}
+
 function App() {
   const [connectionStatus, setConnectionStatus] = useState("connecting");
   const [knownScammerMessage, setKnownScammerMessage] = useState("");
@@ -161,11 +510,27 @@ function App() {
   const [riskScore, setRiskScore] = useState(0);
   const [callOutcome, setCallOutcome] = useState(null);
   const [isStartingCall, setIsStartingCall] = useState(false);
+  const [isSimulating, setIsSimulating] = useState(false);
+  const [isMicCallActive, setIsMicCallActive] = useState(false);
+  const [micDenied, setMicDenied] = useState(false);
+  const [twilioConfigured, setTwilioConfigured] = useState(false);
+  const [twilioCallActive, setTwilioCallActive] = useState(false);
+  const [isCallSessionActive, setIsCallSessionActive] = useState(false);
   const [isEndingCall, setIsEndingCall] = useState(false);
   const [allyAlert, setAllyAlert] = useState("");
   const [allyCopied, setAllyCopied] = useState(false);
   const [activeTab, setActiveTab] = useState("home");
-  const transcriptEndRef = useRef(null);
+  const [redisIntelligence, setRedisIntelligence] = useState(null);
+  const [redisIntelligenceError, setRedisIntelligenceError] = useState("");
+  const [isRedisIntelligenceLoading, setIsRedisIntelligenceLoading] = useState(false);
+  const callerTranscriptEndRef = useRef(null);
+  const victimTranscriptEndRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const mediaStreamRef = useRef(null);
+  const micRecordingActiveRef = useRef(false);
+  const micChunkTimerRef = useRef(null);
+  const micChunksRef = useRef([]);
+  const micMimeTypeRef = useRef("");
   const [theme, setTheme] = useState(() =>
     getInitialTheme({
       savedTheme: window.localStorage.getItem(THEME_STORAGE_KEY),
@@ -185,34 +550,113 @@ function App() {
         ? {
             ...existing,
             ...utterance,
+            speaker: existing.speaker ?? utterance.speaker,
             verificationVerdict: existing.verificationVerdict,
             coachingTip: existing.coachingTip,
           }
         : utterance;
       const withoutDuplicate = current.filter((item) => item.id !== merged.id);
-      return [...withoutDuplicate, merged].slice(-10);
+      return [...withoutDuplicate, merged].slice(-40);
     });
+  }
+
+  function applyTranscriptRetract(retract) {
+    if (!retract.message_id) {
+      return;
+    }
+
+    setUtterances((current) =>
+      current.filter((item) => item.id !== retract.message_id),
+    );
   }
 
   function applyTranscript(transcript) {
     setUtterances((current) => {
       const existing = current.find((item) => item.id === transcript.message_id);
+      const speaker = transcript.speaker ?? "caller";
       const utterance = {
         id: transcript.message_id,
         text: transcript.text,
-        tactic: existing?.tactic ?? "ANALYZING",
+        speaker,
+        timestamp: transcript.timestamp ?? existing?.timestamp ?? Date.now() / 1000,
+        tactic: existing?.tactic ?? (speaker === "caller" ? "ANALYZING" : ""),
         score: existing?.score ?? 0,
         playbookMatch: existing?.playbookMatch ?? "",
         verificationVerdict: existing?.verificationVerdict ?? "",
         coachingTip: existing?.coachingTip ?? "",
       };
       const withoutDuplicate = current.filter((item) => item.id !== utterance.id);
-      return [...withoutDuplicate, utterance].slice(-10);
+      return [...withoutDuplicate, utterance].slice(-40);
     });
   }
 
-  async function handleStartLiveCall() {
-    setIsStartingCall(true);
+  async function uploadMicChunk(blob, filename) {
+    if (blob.size < 500) {
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("audio", blob, filename);
+
+    try {
+      await fetch(`${API_BASE_URL}/transcribe-user`, {
+        method: "POST",
+        body: formData,
+      });
+    } catch {
+      // Keep recording even if a chunk upload fails.
+    }
+  }
+
+  function scheduleMicChunkStop() {
+    if (micChunkTimerRef.current) {
+      window.clearTimeout(micChunkTimerRef.current);
+    }
+
+    micChunkTimerRef.current = window.setTimeout(() => {
+      const recorder = mediaRecorderRef.current;
+      if (recorder && recorder.state === "recording") {
+        recorder.stop();
+      }
+    }, 3000);
+  }
+
+  function startMicRecordingCycle() {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || !micRecordingActiveRef.current || recorder.state !== "inactive") {
+      return;
+    }
+
+    micChunksRef.current = [];
+    recorder.start();
+    scheduleMicChunkStop();
+  }
+
+  function stopMicrophoneCapture() {
+    micRecordingActiveRef.current = false;
+
+    if (micChunkTimerRef.current) {
+      window.clearTimeout(micChunkTimerRef.current);
+      micChunkTimerRef.current = null;
+    }
+
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    mediaRecorderRef.current = null;
+    mediaStreamRef.current = null;
+    micChunksRef.current = [];
+    micMimeTypeRef.current = "";
+    setIsMicCallActive(false);
+  }
+
+  async function handleSimulate() {
+    stopMicrophoneCapture();
+    setMicDenied(false);
+    setTwilioCallActive(false);
+    setIsCallSessionActive(true);
+    setIsSimulating(true);
     setCallOutcome(null);
     setCoachingTip("");
     setAllyAlert("");
@@ -221,15 +665,109 @@ function App() {
     setRiskScore(0);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/reset-call`, { method: "POST" });
+      const response = await fetch(`${API_BASE_URL}/simulate`, { method: "POST" });
       if (!response.ok) {
-        throw new Error("Call monitoring failed to start");
+        throw new Error("Simulation failed to start");
       }
     } catch {
       setCallOutcome({
         status: "error",
-        message: "Could not start live call monitoring. Is the backend running?",
+        message: "Could not start simulation. Is the backend running?",
       });
+    } finally {
+      setIsSimulating(false);
+    }
+  }
+
+  async function handleStartCall() {
+    setIsStartingCall(true);
+    setCallOutcome(null);
+    setCoachingTip("");
+    setAllyAlert("");
+    setAllyCopied(false);
+    setUtterances([]);
+    setRiskScore(0);
+    setMicDenied(false);
+    setTwilioCallActive(false);
+    stopMicrophoneCapture();
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/reset-call`, { method: "POST" });
+      if (!response.ok) {
+        throw new Error("Call failed to start");
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+
+      const preferredTypes = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
+      const mimeType = preferredTypes.find((type) => MediaRecorder.isTypeSupported(type));
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+      micMimeTypeRef.current = recorder.mimeType || mimeType || "audio/webm";
+      micRecordingActiveRef.current = true;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          micChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        const chunks = micChunksRef.current;
+        micChunksRef.current = [];
+
+        if (chunks.length > 0) {
+          const blob = new Blob(chunks, { type: micMimeTypeRef.current });
+          const filename = micMimeTypeRef.current.includes("mp4") ? "chunk.mp4" : "chunk.webm";
+          await uploadMicChunk(blob, filename);
+        }
+
+        if (micRecordingActiveRef.current) {
+          startMicRecordingCycle();
+        }
+      };
+
+      startMicRecordingCycle();
+      setIsMicCallActive(true);
+      setIsCallSessionActive(true);
+
+      if (twilioConfigured) {
+        try {
+          const twilioResponse = await fetch(`${API_BASE_URL}/start-twilio-call`, {
+            method: "POST",
+          });
+          if (twilioResponse.ok) {
+            setTwilioCallActive(true);
+          } else {
+            const errorBody = await twilioResponse.json().catch(() => ({}));
+            setCallOutcome({
+              status: "error",
+              message:
+                errorBody.detail ||
+                "Twilio call failed to start. Microphone-only mode is active.",
+            });
+          }
+        } catch {
+          setCallOutcome({
+            status: "error",
+            message: "Twilio call failed to start. Microphone-only mode is active.",
+          });
+        }
+      }
+    } catch (error) {
+      stopMicrophoneCapture();
+      setIsCallSessionActive(false);
+      setTwilioCallActive(false);
+      if (error?.name === "NotAllowedError" || error?.name === "PermissionDeniedError") {
+        setMicDenied(true);
+      } else {
+        setCallOutcome({
+          status: "error",
+          message:
+            error?.message || "Could not start call with microphone. Is the backend running?",
+        });
+      }
     } finally {
       setIsStartingCall(false);
     }
@@ -250,6 +788,9 @@ function App() {
   }
 
   async function handleEndCall() {
+    stopMicrophoneCapture();
+    setTwilioCallActive(false);
+    setIsMicCallActive(false);
     setIsEndingCall(true);
     try {
       const response = await fetch(`${API_BASE_URL}/end-call`, { method: "POST" });
@@ -264,6 +805,7 @@ function App() {
         message: "Could not finalize the call. Please try again.",
       });
     } finally {
+      setIsCallSessionActive(false);
       setIsEndingCall(false);
     }
   }
@@ -277,9 +819,55 @@ function App() {
     window.localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
 
+  const callerUtterances = useMemo(
+    () => utterances.filter((utterance) => utterance.speaker !== "victim"),
+    [utterances],
+  );
+  const victimUtterances = useMemo(
+    () => utterances.filter((utterance) => utterance.speaker === "victim"),
+    [utterances],
+  );
+
   useEffect(() => {
-    transcriptEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }, [utterances]);
+    callerTranscriptEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [callerUtterances.length]);
+
+  useEffect(() => {
+    victimTranscriptEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [victimUtterances.length]);
+
+  useEffect(() => {
+    return () => {
+      stopMicrophoneCapture();
+    };
+  }, []);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function fetchTwilioStatus() {
+      try {
+        const response = await fetch(`${API_BASE_URL}/twilio-status`);
+        if (!response.ok) {
+          return;
+        }
+        const result = await response.json();
+        if (!isCancelled) {
+          setTwilioConfigured(Boolean(result.configured));
+        }
+      } catch {
+        if (!isCancelled) {
+          setTwilioConfigured(false);
+        }
+      }
+    }
+
+    fetchTwilioStatus();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const socket = new WebSocket(WEBSOCKET_URL);
@@ -338,6 +926,11 @@ function App() {
         return;
       }
 
+      if (alert.type === "transcript_retract") {
+        applyTranscriptRetract(alert);
+        return;
+      }
+
       if (alert.message_id) {
         applyAlert(alert);
       }
@@ -356,16 +949,55 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (activeTab !== "redis") {
+      return undefined;
+    }
+
+    let isCancelled = false;
+
+    async function fetchRedisIntelligence() {
+      setIsRedisIntelligenceLoading(true);
+      try {
+        const response = await fetch(`${API_BASE_URL}/redis-intelligence`);
+        if (!response.ok) {
+          throw new Error("Redis intelligence endpoint returned an error");
+        }
+        const result = await response.json();
+        if (!isCancelled) {
+          setRedisIntelligence(result);
+          setRedisIntelligenceError("");
+        }
+      } catch (error) {
+        if (!isCancelled) {
+          setRedisIntelligenceError(error.message || "Could not load Redis intelligence");
+        }
+      } finally {
+        if (!isCancelled) {
+          setIsRedisIntelligenceLoading(false);
+        }
+      }
+    }
+
+    fetchRedisIntelligence();
+    const intervalId = window.setInterval(fetchRedisIntelligence, 2000);
+
+    return () => {
+      isCancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [activeTab]);
+
   const riskColor = getRiskColor(riskScore);
   const riskLevel = getRiskLevel(riskScore);
   const riskPercent = useMemo(() => `${Math.min(riskScore, 1) * 100}%`, [riskScore]);
-  const verifiedCount = utterances.filter((utterance) => utterance.verificationVerdict).length;
+  const verifiedCount = callerUtterances.filter((utterance) => utterance.verificationVerdict).length;
   const agentActivity = {
-    Sentinel: connectionStatus === "connected" || utterances.length > 0,
+    Sentinel: connectionStatus === "connected" || callerUtterances.length > 0,
     Verifier: verifiedCount > 0,
     Coach: Boolean(coachingTip),
     Ally: Boolean(allyAlert),
-    Scribe: utterances.length > 0 || Boolean(callOutcome),
+    Scribe: callerUtterances.length > 0 || Boolean(callOutcome),
   };
   const systemReadiness =
     connectionStatus === "connected" ? "Ready to protect" : "Waiting for backend";
@@ -406,6 +1038,13 @@ function App() {
           >
             Architecture
           </button>
+          <button
+            type="button"
+            className={`nav-tab ${activeTab === "redis" ? "active" : ""}`}
+            onClick={() => setActiveTab("redis")}
+          >
+            Redis Intelligence
+          </button>
         </div>
         <button className="theme-toggle" onClick={handleToggleTheme} type="button">
           <span>{theme === "dark" ? "Dark" : "Light"}</span>
@@ -434,6 +1073,12 @@ function App() {
             </a>
           </div>
         </section>
+      ) : activeTab === "redis" ? (
+        <RedisIntelligenceDashboard
+          data={redisIntelligence}
+          error={redisIntelligenceError}
+          loading={isRedisIntelligenceLoading}
+        />
       ) : (
         <>
       <section className="hero-section" id="top">
@@ -449,10 +1094,10 @@ function App() {
             <button
               className="primary-button"
               disabled={isStartingCall || connectionStatus !== "connected"}
-              onClick={handleStartLiveCall}
+              onClick={handleStartCall}
               type="button"
             >
-              {isStartingCall ? "Getting ready..." : "Start live monitoring"}
+              {isStartingCall ? "Starting call..." : "Start Call"}
             </button>
             <a className="secondary-button" href="#agents">
               Meet the agents
@@ -577,6 +1222,12 @@ function App() {
               <section className="error-banner">{callOutcome.message}</section>
             )}
 
+            {micDenied && (
+              <section className="mic-warning-banner">
+                Microphone access denied — victim audio unavailable.
+              </section>
+            )}
+
             <section className="glass-panel call-control-panel">
               <div>
                 <p className="eyebrow">Monitoring controls</p>
@@ -584,21 +1235,38 @@ function App() {
               </div>
               <div className="call-actions">
                 <button
-                  className="primary-button compact"
-                  disabled={isStartingCall || connectionStatus !== "connected"}
-                  onClick={handleStartLiveCall}
+                  className="secondary-button compact"
+                  disabled={isSimulating || connectionStatus !== "connected"}
+                  onClick={handleSimulate}
                   type="button"
                 >
-                  {isStartingCall ? "Getting ready..." : "Start live monitoring"}
+                  {isSimulating ? "Simulating..." : "Simulate"}
+                </button>
+                <button
+                  className="primary-button compact"
+                  disabled={isStartingCall || connectionStatus !== "connected"}
+                  onClick={handleStartCall}
+                  type="button"
+                >
+                  {isStartingCall ? "Starting call..." : "Start Call"}
                 </button>
                 <button
                   className="danger-button compact"
-                  disabled={isEndingCall || Boolean(callOutcome)}
+                  disabled={isEndingCall || !isCallSessionActive}
                   onClick={handleEndCall}
                   type="button"
                 >
-                  {isEndingCall ? "Ending call..." : "End call"}
+                  {isEndingCall ? "Ending call..." : "End Call"}
                 </button>
+                {isMicCallActive && <span className="mic-active-pill">Mic live</span>}
+                {isMicCallActive && !twilioConfigured && (
+                  <span className="twilio-simulated-pill">
+                    Twilio not connected — simulated mode
+                  </span>
+                )}
+                {isMicCallActive && twilioConfigured && twilioCallActive && (
+                  <span className="twilio-active-pill">Twilio calling</span>
+                )}
               </div>
             </section>
 
@@ -606,52 +1274,83 @@ function App() {
               <div className="panel-header">
                 <div>
                   <p className="eyebrow">Transcript</p>
-                  <h2>What the agents are hearing</h2>
+                  <h2>What each side is saying</h2>
                 </div>
-                <span className="count-pill">{utterances.length} entries</span>
+                <span className="count-pill">
+                  {callerUtterances.length + victimUtterances.length} entries
+                </span>
               </div>
-              <div className="transcript">
-                {utterances.length === 0 ? (
-                  <p className="empty">
-                    Click Start live monitoring, then call your Twilio number and speak.
-                  </p>
-                ) : (
-                  utterances.map((utterance) => {
-                    const verificationTag = getVerificationTag(utterance.verificationVerdict);
+              <div className="transcript-columns">
+                <div className="transcript-column">
+                  <div className="transcript-column-header caller">Caller</div>
+                  <div className="transcript-column-scroll">
+                    {callerUtterances.length === 0 ? (
+                      <p className="empty">
+                        Caller speech appears here from Twilio or simulation.
+                      </p>
+                    ) : (
+                      callerUtterances.map((utterance) => {
+                        const verificationTag = getVerificationTag(utterance.verificationVerdict);
 
-                    return (
-                      <article className="utterance" key={utterance.id}>
-                        <p>{utterance.text}</p>
-                        <div className="utterance-meta">
-                          <span>
-                            {formatTacticLabel(utterance.tactic)}
-                            {utterance.tactic &&
-                              utterance.tactic !== "NONE" &&
-                              utterance.tactic !== "ANALYZING" &&
-                              ` · ${utterance.score.toFixed(2)}`}
+                        return (
+                          <article className="transcript-card caller-card" key={utterance.id}>
+                            <p>{utterance.text}</p>
+                            <div className="transcript-card-meta">
+                              <span className="transcript-card-time">
+                                {formatTimestamp(utterance.timestamp)}
+                              </span>
+                              <span>
+                                {formatTacticLabel(utterance.tactic)}
+                                {utterance.tactic &&
+                                  utterance.tactic !== "NONE" &&
+                                  utterance.tactic !== "ANALYZING" &&
+                                  ` · ${utterance.score.toFixed(2)}`}
+                              </span>
+                              {utterance.playbookMatch && (
+                                <span className="playbook-tag">
+                                  Matches: {utterance.playbookMatch}
+                                </span>
+                              )}
+                              {verificationTag && (
+                                <span className={verificationTag.className}>
+                                  {verificationTag.label}
+                                </span>
+                              )}
+                            </div>
+                            {utterance.coachingTip && (
+                              <p className="utterance-coaching">
+                                <span>Coach</span>
+                                {utterance.coachingTip}
+                              </p>
+                            )}
+                          </article>
+                        );
+                      })
+                    )}
+                    <div ref={callerTranscriptEndRef} />
+                  </div>
+                </div>
+
+                <div className="transcript-column">
+                  <div className="transcript-column-header victim">You</div>
+                  <div className="transcript-column-scroll">
+                    {victimUtterances.length === 0 ? (
+                      <p className="empty">
+                        Click Start Call and speak — your side appears here.
+                      </p>
+                    ) : (
+                      victimUtterances.map((utterance) => (
+                        <article className="transcript-card victim-card" key={utterance.id}>
+                          <p>{utterance.text}</p>
+                          <span className="transcript-card-time">
+                            {formatTimestamp(utterance.timestamp)}
                           </span>
-                          {utterance.playbookMatch && (
-                            <span className="playbook-tag">
-                              Matches: {utterance.playbookMatch}
-                            </span>
-                          )}
-                          {verificationTag && (
-                            <span className={verificationTag.className}>
-                              {verificationTag.label}
-                            </span>
-                          )}
-                        </div>
-                        {utterance.coachingTip && (
-                          <p className="utterance-coaching">
-                            <span>Coach</span>
-                            {utterance.coachingTip}
-                          </p>
-                        )}
-                      </article>
-                    );
-                  })
-                )}
-                <div ref={transcriptEndRef} />
+                        </article>
+                      ))
+                    )}
+                    <div ref={victimTranscriptEndRef} />
+                  </div>
+                </div>
               </div>
             </section>
           </div>
