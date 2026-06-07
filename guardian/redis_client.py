@@ -10,7 +10,11 @@ TRANSCRIPT_STREAM = "guardian:transcript"
 AGENTS_GROUP = "agents"
 RISK_TIMELINE = "guardian:risk_timeline"
 ALERTS_CHANNEL = "guardian:alerts"
+TRANSCRIPT_CHANNEL = "guardian:transcripts"
 COACHING_CHANNEL = "guardian:coaching"
+VERIFICATION_CHANNEL = "guardian:verification"
+ALLY_CHANNEL = "guardian:ally"
+ALLY_ALERT_KEY = "guardian:ally_alert"
 KNOWN_SCAMMERS_FILTER = "guardian:known_scammers"
 PLAYBOOKS_VSET = "guardian:playbooks"
 EMBEDDING_MODEL = "text-embedding-3-small"
@@ -252,6 +256,9 @@ async def cleanup_call_data(
         for message_id in ids_to_delete:
             await redis.xdel(TRANSCRIPT_STREAM, message_id)
             await redis.delete(f"guardian:tactic:{message_id}")
+            await redis.delete(f"guardian:verification:{message_id}")
+
+        await redis.delete(ALLY_ALERT_KEY)
 
         if risk_timestamps_ms:
             await redis.ts().delete(

@@ -90,7 +90,12 @@ def _parse_classification(content: str) -> dict[str, str]:
 def _fallback_classification(message: dict[str, Any]) -> dict[str, str]:
     text = message.get("text", "").lower()
 
-    if "gift card" in text or "apple gift" in text or "read me the numbers" in text:
+    if (
+        "gift card" in text
+        or "apple gift" in text
+        or "google play" in text
+        or "read me the numbers" in text
+    ):
         return {"tactic": "GIFT_CARD_REQUEST", "confidence": "0.95"}
     if "wire" in text or "western union" in text or "moneygram" in text:
         return {"tactic": "WIRE_REQUEST", "confidence": "0.9"}
@@ -98,9 +103,15 @@ def _fallback_classification(message: dict[str, Any]) -> dict[str, str]:
         return {"tactic": "AUTHORITY_IMPERSONATION", "confidence": "0.8"}
     if "don't tell" in text or "quietly" in text or "not to tell" in text:
         return {"tactic": "SECRECY", "confidence": "0.8"}
-    if "today" in text or "right now" in text or "weekend in jail" in text:
+    if (
+        "today" in text
+        or "right now" in text
+        or "immediately" in text
+        or "weekend in jail" in text
+        or "needs $" in text
+    ):
         return {"tactic": "URGENCY", "confidence": "0.75"}
-    if "jail" in text or "accident" in text or "hurt" in text:
+    if "jail" in text or "bail" in text or "arrested" in text or "accident" in text or "hurt" in text:
         return {"tactic": "FEAR", "confidence": "0.7"}
 
     return {"tactic": "NONE", "confidence": "0.1"}
@@ -112,6 +123,8 @@ def _apply_payment_overrides(
 ) -> dict[str, str]:
     fallback = _fallback_classification(message)
     if fallback["tactic"] in {"GIFT_CARD_REQUEST", "WIRE_REQUEST"}:
+        return fallback
+    if classification["tactic"] == "NONE" and fallback["tactic"] != "NONE":
         return fallback
 
     return classification

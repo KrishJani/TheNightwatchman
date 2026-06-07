@@ -214,6 +214,50 @@ h2 {
   padding: 20px 22px;
 }
 
+.ally-card {
+  background: rgba(168, 85, 247, 0.16);
+  border: 1px solid rgba(216, 180, 254, 0.35);
+  border-radius: 20px;
+  color: #f3e8ff;
+  margin-bottom: 18px;
+  padding: 20px 22px;
+}
+
+.ally-card-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.ally-card-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.ally-card-subtext {
+  color: #94a3b8;
+  font-size: 0.85rem;
+  margin-top: 10px;
+}
+
+.copy-button {
+  background: rgba(148, 163, 184, 0.18);
+  border: 1px solid rgba(203, 213, 225, 0.25);
+  border-radius: 999px;
+  color: #e2e8f0;
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 8px 14px;
+}
+
+.copy-button:hover {
+  background: rgba(148, 163, 184, 0.28);
+}
+
 .transcript {
   display: grid;
   gap: 12px;
@@ -256,4 +300,22 @@ h2 {
   font-size: 0.75rem;
   font-weight: 600;
   padding: 4px 10px;
+}
+
+.verification-tag {
+  border-radius: 999px;
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 4px 10px;
+}
+
+.verification-tag-warning {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fbbf24;
+}
+
+.verification-tag-neutral {
+  background: rgba(148, 163, 184, 0.18);
+  color: #94a3b8;
 }

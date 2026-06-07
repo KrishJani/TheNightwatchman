@@ -21,10 +21,23 @@ function buildUtterance(alert) {
   return {
     id: alert.message_id,
     text: alert.text,
-    tactic: alert.tactic,
+    tactic: alert.tactic ?? "ANALYZING",
     score: Number(alert.score ?? 0),
     playbookMatch: alert.playbook_match ?? "",
+    verificationVerdict: "",
   };
+}
+
+function getVerificationTag(verdict) {
+  if (verdict === "CREDIBLE") {
+    return { label: "Claim unchallenged", className: "verification-tag verification-tag-neutral" };
+  }
+
+  if (verdict === "SUSPICIOUS" || verdict === "UNVERIFIABLE") {
+    return { label: "⚠ Unverifiable claim", className: "verification-tag verification-tag-warning" };
+  }
+
+  return null;
 }
 
 function App() {
@@ -36,36 +49,72 @@ function App() {
   const [callOutcome, setCallOutcome] = useState(null);
   const [isStartingCall, setIsStartingCall] = useState(false);
   const [isEndingCall, setIsEndingCall] = useState(false);
+  const [allyAlert, setAllyAlert] = useState("");
+  const [allyCopied, setAllyCopied] = useState(false);
 
   function applyAlert(alert) {
     const nextScore = Number(alert.score ?? 0);
     setRiskScore((current) => Math.max(current, nextScore));
     setUtterances((current) => {
       const utterance = buildUtterance(alert);
+      const existing = current.find((item) => item.id === utterance.id);
+      const merged = existing ? { ...existing, ...utterance } : utterance;
+      const withoutDuplicate = current.filter((item) => item.id !== merged.id);
+      return [...withoutDuplicate, merged].slice(-10);
+    });
+  }
+
+  function applyTranscript(transcript) {
+    setUtterances((current) => {
+      const existing = current.find((item) => item.id === transcript.message_id);
+      const utterance = {
+        id: transcript.message_id,
+        text: transcript.text,
+        tactic: existing?.tactic ?? "ANALYZING",
+        score: existing?.score ?? 0,
+        playbookMatch: existing?.playbookMatch ?? "",
+        verificationVerdict: existing?.verificationVerdict ?? "",
+      };
       const withoutDuplicate = current.filter((item) => item.id !== utterance.id);
       return [...withoutDuplicate, utterance].slice(-10);
     });
   }
 
-  async function handleStartSimulation() {
+  async function handleStartLiveCall() {
     setIsStartingCall(true);
     setCallOutcome(null);
     setCoachingTip("");
+    setAllyAlert("");
+    setAllyCopied(false);
     setUtterances([]);
     setRiskScore(0);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/simulate`, { method: "POST" });
+      const response = await fetch(`${API_BASE_URL}/reset-call`, { method: "POST" });
       if (!response.ok) {
-        throw new Error("Simulation failed to start");
+        throw new Error("Call monitoring failed to start");
       }
     } catch {
       setCallOutcome({
         status: "error",
-        message: "Could not start the simulation. Is the backend running?",
+        message: "Could not start live call monitoring. Is the backend running?",
       });
     } finally {
       setIsStartingCall(false);
+    }
+  }
+
+  async function handleCopyAllyAlert() {
+    if (!allyAlert) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(allyAlert);
+      setAllyCopied(true);
+      window.setTimeout(() => setAllyCopied(false), 2000);
+    } catch {
+      setAllyCopied(false);
     }
   }
 
@@ -110,6 +159,27 @@ function App() {
 
       if (alert.type === "coaching_tip") {
         setCoachingTip(alert.tip);
+        return;
+      }
+
+      if (alert.type === "verification_result") {
+        setUtterances((current) =>
+          current.map((item) =>
+            item.id === alert.message_id
+              ? { ...item, verificationVerdict: alert.verdict ?? "" }
+              : item,
+          ),
+        );
+        return;
+      }
+
+      if (alert.type === "ally_alert") {
+        setAllyAlert(alert.message ?? "");
+        return;
+      }
+
+      if (alert.type === "transcript") {
+        applyTranscript(alert);
         return;
       }
 
@@ -177,10 +247,10 @@ function App() {
         <button
           className="start-call-button"
           disabled={isStartingCall || connectionStatus !== "connected"}
-          onClick={handleStartSimulation}
+          onClick={handleStartLiveCall}
           type="button"
         >
-          {isStartingCall ? "Starting call..." : "Start simulation"}
+          {isStartingCall ? "Getting ready..." : "Start live monitoring"}
         </button>
         <button
           className="end-call-button"
@@ -215,9 +285,14 @@ function App() {
         <h2>Transcript</h2>
         <div className="transcript">
           {utterances.length === 0 ? (
-            <p className="empty">Click Start simulation to begin a demo call...</p>
+            <p className="empty">
+              Click Start live monitoring, then call your Twilio number and speak.
+            </p>
           ) : (
-            utterances.map((utterance) => (
+            utterances.map((utterance) => {
+              const verificationTag = getVerificationTag(utterance.verificationVerdict);
+
+              return (
               <article className="utterance" key={utterance.id}>
                 <p>{utterance.text}</p>
                 <div className="utterance-meta">
@@ -229,15 +304,39 @@ function App() {
                       Matches: {utterance.playbookMatch}
                     </span>
                   )}
+                  {verificationTag && (
+                    <span className={verificationTag.className}>
+                      {verificationTag.label}
+                    </span>
+                  )}
                 </div>
               </article>
-            ))
+              );
+            })
           )}
         </div>
       </section>
 
       {coachingTip && (
         <section className="coaching-card">You could say: {coachingTip}</section>
+      )}
+
+      {allyAlert && (
+        <section className="ally-card">
+          <div className="ally-card-header">
+            <p className="ally-card-title">Ally Alert Ready: {allyAlert}</p>
+            <button
+              className="copy-button"
+              onClick={handleCopyAllyAlert}
+              type="button"
+            >
+              {allyCopied ? "Copied" : "Copy"}
+            </button>
+          </div>
+          <p className="ally-card-subtext">
+            In production this would be sent to your trusted contact.
+          </p>
+        </section>
       )}
     </main>
   );
