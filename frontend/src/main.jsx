@@ -7,6 +7,12 @@ const WEBSOCKET_URL = "ws://localhost:8000/ws";
 const API_BASE_URL = "http://localhost:8000";
 const ARCHITECTURE_URL = "https://app.eraser.io/workspace/dygGZhvvUSu03e7ZHjXt?origin=share";
 
+// Voice-activity detection for the microphone. An utterance is only cut at a
+// natural pause so each Whisper upload is one complete sentence.
+const MIC_SPEECH_RMS = 0.025; // normalized RMS above which we treat audio as speech
+const MIC_SILENCE_HANG_MS = 850; // silence after speech that ends an utterance
+const MIC_MAX_UTTERANCE_MS = 15000; // safety cap for a non-stop talker
+
 const PROMISE_CARDS = [
   {
     title: "Detects pressure tactics",
@@ -530,9 +536,12 @@ function App() {
   const mediaStreamRef = useRef(null);
   const micRecordingActiveRef = useRef(false);
   const micMutedRef = useRef(false);
-  const micChunkTimerRef = useRef(null);
   const micChunksRef = useRef([]);
   const micMimeTypeRef = useRef("");
+  const audioContextRef = useRef(null);
+  const analyserRef = useRef(null);
+  const vadIntervalRef = useRef(null);
+  const vadStateRef = useRef({ hasSpeech: false, lastVoiceAt: 0, startedAt: 0 });
   const [theme, setTheme] = useState(() =>
     getInitialTheme({
       savedTheme: window.localStorage.getItem(THEME_STORAGE_KEY),
@@ -610,19 +619,14 @@ function App() {
     }
   }
 
-  function scheduleMicChunkStop() {
-    if (micChunkTimerRef.current) {
-      window.clearTimeout(micChunkTimerRef.current);
-    }
-
-    micChunkTimerRef.current = window.setTimeout(() => {
-      const recorder = mediaRecorderRef.current;
-      if (recorder && recorder.state === "recording") {
-        recorder.stop();
-      }
-    }, 3000);
+  function resetVadState() {
+    const now = (typeof performance !== "undefined" ? performance.now() : Date.now());
+    vadStateRef.current = { hasSpeech: false, lastVoiceAt: now, startedAt: now };
   }
 
+  // Begin (or resume) continuous capture. The recorder runs without a fixed
+  // time limit; the VAD loop decides when an utterance has ended so sentences
+  // are never cut mid-word.
   function startMicRecordingCycle() {
     const recorder = mediaRecorderRef.current;
     if (
@@ -635,16 +639,58 @@ function App() {
     }
 
     micChunksRef.current = [];
-    recorder.start();
-    scheduleMicChunkStop();
+    resetVadState();
+    // Small timeslice keeps data flowing so onstop always has the full
+    // utterance buffered, even for long sentences.
+    recorder.start(250);
+  }
+
+  // Read the live microphone level and decide when the current utterance has
+  // finished (a short pause) so it can be transcribed as one complete sentence.
+  function pollVoiceActivity() {
+    const analyser = analyserRef.current;
+    const recorder = mediaRecorderRef.current;
+    if (!analyser || !recorder || recorder.state !== "recording" || micMutedRef.current) {
+      return;
+    }
+
+    const buffer = new Uint8Array(analyser.fftSize);
+    analyser.getByteTimeDomainData(buffer);
+    let sumSquares = 0;
+    for (let index = 0; index < buffer.length; index += 1) {
+      const normalized = (buffer[index] - 128) / 128;
+      sumSquares += normalized * normalized;
+    }
+    const rms = Math.sqrt(sumSquares / buffer.length);
+
+    const now = (typeof performance !== "undefined" ? performance.now() : Date.now());
+    const state = vadStateRef.current;
+
+    if (rms > MIC_SPEECH_RMS) {
+      state.hasSpeech = true;
+      state.lastVoiceAt = now;
+    }
+
+    const silenceFor = now - state.lastVoiceAt;
+    const utteranceFor = now - state.startedAt;
+    const endedOnPause = state.hasSpeech && silenceFor >= MIC_SILENCE_HANG_MS;
+    const endedOnMaxLength = state.hasSpeech && utteranceFor >= MIC_MAX_UTTERANCE_MS;
+
+    if (endedOnPause || endedOnMaxLength) {
+      // Stopping finalizes a valid, decodable audio file. onstop restarts
+      // capture synchronously, so there is no recording gap.
+      recorder.stop();
+    }
+  }
+
+  function startVoiceActivityLoop() {
+    if (vadIntervalRef.current) {
+      window.clearInterval(vadIntervalRef.current);
+    }
+    vadIntervalRef.current = window.setInterval(pollVoiceActivity, 80);
   }
 
   function pauseMicRecording() {
-    if (micChunkTimerRef.current) {
-      window.clearTimeout(micChunkTimerRef.current);
-      micChunkTimerRef.current = null;
-    }
-
     micChunksRef.current = [];
 
     const recorder = mediaRecorderRef.current;
@@ -671,17 +717,22 @@ function App() {
     micMutedRef.current = false;
     setIsMicMuted(false);
 
-    if (micChunkTimerRef.current) {
-      window.clearTimeout(micChunkTimerRef.current);
-      micChunkTimerRef.current = null;
+    if (vadIntervalRef.current) {
+      window.clearInterval(vadIntervalRef.current);
+      vadIntervalRef.current = null;
     }
 
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
       mediaRecorderRef.current.stop();
     }
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    if (audioContextRef.current && audioContextRef.current.state !== "closed") {
+      audioContextRef.current.close().catch(() => {});
+    }
     mediaRecorderRef.current = null;
     mediaStreamRef.current = null;
+    audioContextRef.current = null;
+    analyserRef.current = null;
     micChunksRef.current = [];
     micMimeTypeRef.current = "";
     setIsMicCallActive(false);
@@ -738,6 +789,14 @@ function App() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaStreamRef.current = stream;
 
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      const audioContext = new AudioContextClass();
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 1024;
+      audioContext.createMediaStreamSource(stream).connect(analyser);
+      audioContextRef.current = audioContext;
+      analyserRef.current = analyser;
+
       const preferredTypes = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
       const mimeType = preferredTypes.find((type) => MediaRecorder.isTypeSupported(type));
       const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
@@ -751,22 +810,28 @@ function App() {
         }
       };
 
-      recorder.onstop = async () => {
+      recorder.onstop = () => {
         const chunks = micChunksRef.current;
+        const hadSpeech = vadStateRef.current.hasSpeech;
         micChunksRef.current = [];
 
-        if (!micMutedRef.current && chunks.length > 0) {
-          const blob = new Blob(chunks, { type: micMimeTypeRef.current });
-          const filename = micMimeTypeRef.current.includes("mp4") ? "chunk.mp4" : "chunk.webm";
-          await uploadMicChunk(blob, filename);
-        }
-
+        // Restart capture FIRST (synchronously) so the microphone is never
+        // dead while an upload is in flight — no spoken words are lost.
         if (micRecordingActiveRef.current && !micMutedRef.current) {
           startMicRecordingCycle();
+        }
+
+        // Only upload utterances that actually contained speech, then let the
+        // network round-trip happen in the background.
+        if (hadSpeech && chunks.length > 0) {
+          const blob = new Blob(chunks, { type: micMimeTypeRef.current });
+          const filename = micMimeTypeRef.current.includes("mp4") ? "chunk.mp4" : "chunk.webm";
+          void uploadMicChunk(blob, filename);
         }
       };
 
       startMicRecordingCycle();
+      startVoiceActivityLoop();
       setIsMicCallActive(true);
       setIsCallSessionActive(true);
 

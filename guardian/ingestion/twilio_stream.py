@@ -39,15 +39,21 @@ TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER", "")
 TARGET_PHONE_NUMBER = os.getenv("TARGET_PHONE_NUMBER", "")
 WHISPER_MODEL = "whisper-1"
-# Lower flush interval => speech reaches the console sooner. ~2s still gives
-# Whisper enough audio for a usable transcription.
-AUDIO_FLUSH_SECONDS = 2
-MIN_TRANSCRIPT_WORDS = 3
-# A short fragment is held at most this many flush cycles before being
-# published anyway, so slow/short speech never gets stuck waiting for more.
-MAX_PENDING_FLUSH_CYCLES = 1
+# The caller's speech is segmented on natural pauses rather than a fixed clock,
+# so each Whisper request receives one complete utterance instead of a slice cut
+# mid-word. This is what keeps the transcript both full and close to real time.
+SILENCE_HANG_SECONDS = 0.8  # silence after speech that ends an utterance
+MAX_UTTERANCE_SECONDS = 15  # safety flush for a caller who never pauses
+# When the caller has not started speaking yet, keep only a short lead-in of
+# buffered frames so a long quiet stretch never balloons the buffer.
+PRE_SPEECH_LEAD_SECONDS = 0.4
 MULAW_SAMPLE_RATE = 8000
 PCM_SAMPLE_WIDTH = 2
+# Each Twilio media frame carries 20 ms of 8 kHz mulaw audio.
+MULAW_FRAME_SECONDS = 0.02
+PRE_SPEECH_LEAD_FRAMES = int(PRE_SPEECH_LEAD_SECONDS / MULAW_FRAME_SECONDS)
+# Per-frame RMS (after mulaw->PCM) above which a frame counts as speech.
+SPEECH_RMS_THRESHOLD = 300
 SCAM_TRANSCRIPT_KEYWORDS = {
     "arrest",
     "arrested",
@@ -321,6 +327,19 @@ def _pcm_rms(pcm_audio: bytes) -> float:
     return math.sqrt(sum(sample * sample for sample in samples) / len(samples))
 
 
+def _mulaw_payload_rms(payload: str) -> float:
+    """RMS amplitude of a single base64 mulaw media frame, used for VAD."""
+    try:
+        mulaw_audio = base64.b64decode(payload)
+    except (ValueError, TypeError):
+        return 0.0
+
+    if not mulaw_audio:
+        return 0.0
+
+    return _pcm_rms(_mulaw_to_pcm(mulaw_audio))
+
+
 def _normalize_for_noise(text: str) -> str:
     cleaned = re.sub(r"[^\w\s]", " ", text.lower())
     return re.sub(r"\s+", " ", cleaned).strip()
@@ -351,21 +370,12 @@ def _is_probably_noise(text: str) -> bool:
     return False
 
 
-def _should_publish_transcription(text: str) -> bool:
-    normalized = text.strip().lower()
-    if len(normalized.split()) >= MIN_TRANSCRIPT_WORDS:
-        return True
-
-    return _has_scam_keyword(normalized)
-
-
 async def _transcription_worker(
     audio_queue: asyncio.Queue[list[str] | None],
     caller_state: dict[str, str],
 ) -> None:
-    pending_text = ""
-    pending_cycles = 0
-
+    # Each queued item is one complete utterance (segmented on a pause), so it
+    # can be transcribed and published as a single full sentence.
     while True:
         mulaw_payloads = await audio_queue.get()
         if mulaw_payloads is None:
@@ -375,42 +385,17 @@ async def _transcription_worker(
         if not transcription:
             continue
 
-        # Drop obvious Whisper silence/hallucination artifacts before they can
-        # accumulate into the pending buffer.
-        if not pending_text and _is_probably_noise(transcription):
+        if _is_probably_noise(transcription):
             continue
 
-        pending_text = f"{pending_text} {transcription}".strip()
-        pending_cycles += 1
+        if await matches_recent_victim_transcript(transcription):
+            print(
+                f"Skipping Twilio transcript (matches victim mic): {transcription}",
+                flush=True,
+            )
+            continue
 
-        # Publish as soon as the fragment is meaningful, or once it has waited
-        # long enough, so the transcript stays close to real time instead of
-        # buffering several utterances together.
-        if (
-            _should_publish_transcription(pending_text)
-            or pending_cycles > MAX_PENDING_FLUSH_CYCLES
-        ):
-            if _is_probably_noise(pending_text):
-                pending_text = ""
-                pending_cycles = 0
-                continue
-
-            if await matches_recent_victim_transcript(pending_text):
-                print(
-                    f"Skipping Twilio transcript (matches victim mic): {pending_text}",
-                    flush=True,
-                )
-                pending_text = ""
-                pending_cycles = 0
-                continue
-
-            await _write_transcript(pending_text, caller_state["number"])
-            pending_text = ""
-            pending_cycles = 0
-
-    if pending_text and not _is_probably_noise(pending_text):
-        if not await matches_recent_victim_transcript(pending_text):
-            await _write_transcript(pending_text, caller_state["number"])
+        await _write_transcript(transcription, caller_state["number"])
 
 
 def _caller_number_from_start(message: dict[str, object]) -> str:
@@ -438,7 +423,10 @@ async def handle_twilio_media(websocket: WebSocket) -> None:
     transcription_task = asyncio.create_task(
         _transcription_worker(audio_queue, caller_state)
     )
-    last_flush = time.monotonic()
+    # Voice-activity state for utterance segmentation.
+    has_speech = False
+    last_voice_at = time.monotonic()
+    utterance_started_at = time.monotonic()
 
     try:
         while True:
@@ -457,27 +445,42 @@ async def handle_twilio_media(websocket: WebSocket) -> None:
 
             if event_type == "media":
                 media = message.get("media", {})
-                if isinstance(media, dict):
-                    payload = media.get("payload")
-                    if payload:
-                        audio_buffer.append(str(payload))
+                payload = media.get("payload") if isinstance(media, dict) else None
+                if not payload:
+                    continue
 
+                payload = str(payload)
+                audio_buffer.append(payload)
                 now = time.monotonic()
-                if now - last_flush >= AUDIO_FLUSH_SECONDS and audio_buffer:
-                    buffered_payloads = audio_buffer
+
+                if _mulaw_payload_rms(payload) >= SPEECH_RMS_THRESHOLD:
+                    if not has_speech:
+                        utterance_started_at = now
+                    has_speech = True
+                    last_voice_at = now
+
+                if not has_speech:
+                    # Keep only a short lead-in so silence never accumulates.
+                    if len(audio_buffer) > PRE_SPEECH_LEAD_FRAMES:
+                        audio_buffer = audio_buffer[-PRE_SPEECH_LEAD_FRAMES:]
+                    continue
+
+                ended_on_pause = now - last_voice_at >= SILENCE_HANG_SECONDS
+                ended_on_max_length = now - utterance_started_at >= MAX_UTTERANCE_SECONDS
+                if ended_on_pause or ended_on_max_length:
+                    await audio_queue.put(audio_buffer)
                     audio_buffer = []
-                    last_flush = now
-                    await audio_queue.put(buffered_payloads)
+                    has_speech = False
 
             if event_type == "stop":
-                if audio_buffer:
+                if has_speech and audio_buffer:
                     await audio_queue.put(audio_buffer)
                     audio_buffer = []
                 break
     except WebSocketDisconnect:
         print("Twilio media WebSocket disconnected", flush=True)
     finally:
-        if audio_buffer:
+        if has_speech and audio_buffer:
             await audio_queue.put(audio_buffer)
         await audio_queue.put(None)
         await transcription_task

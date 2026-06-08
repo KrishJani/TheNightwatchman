@@ -1174,7 +1174,7 @@ h1 {
 }
 
 .agent-constellation {
-  min-height: 690px;
+  min-height: 820px;
   position: relative;
 }
 
@@ -1216,7 +1216,7 @@ h1 {
   left: 50%;
   padding: 28px;
   text-align: center;
-  top: 55%;
+  top: 50%;
   transform: translate(-50%, -50%);
   width: 240px;
   z-index: 2;
@@ -1254,25 +1254,40 @@ h1 {
 }
 
 .agent-node {
+  --orbit-radius: clamp(230px, 27vw, 300px);
+  --orbit-duration: 36s;
+  --orbit-angle: 0deg;
+  animation: agentOrbit var(--orbit-duration) linear infinite;
   background:
     linear-gradient(180deg, var(--soft-strong), color-mix(in srgb, var(--soft), transparent 8%)),
     radial-gradient(circle at 20% 0%, var(--safe-glow), transparent 52%);
   border-radius: 30px;
-  max-width: 310px;
+  left: 50%;
   min-height: 230px;
   padding: 24px;
+  top: 50%;
+  transform: translate(-50%, -50%) rotate(var(--orbit-angle))
+    translateX(var(--orbit-radius)) rotate(calc(-1 * var(--orbit-angle)));
   transition:
     border-color 180ms ease,
-    transform 180ms ease,
     box-shadow 180ms ease;
+  width: 250px;
 }
 
-.agent-node:nth-of-type(2n) {
-  animation: nodeHover 9s ease-in-out infinite;
+@keyframes agentOrbit {
+  from {
+    transform: translate(-50%, -50%) rotate(var(--orbit-angle))
+      translateX(var(--orbit-radius)) rotate(calc(-1 * var(--orbit-angle)));
+  }
+  to {
+    transform: translate(-50%, -50%) rotate(calc(var(--orbit-angle) + 360deg))
+      translateX(var(--orbit-radius)) rotate(calc(-1 * (var(--orbit-angle) + 360deg)));
+  }
 }
 
-.agent-node:nth-of-type(2n + 1) {
-  animation: nodeHover 11s ease-in-out infinite reverse;
+.agent-node:hover,
+.agent-node:focus-visible {
+  animation-play-state: paused;
 }
 
 .agent-node:hover,
@@ -1280,7 +1295,7 @@ h1 {
 .agent-node.active {
   border-color: color-mix(in srgb, var(--accent), transparent 22%);
   box-shadow: var(--shadow);
-  transform: translateY(-6px);
+  z-index: 3;
 }
 
 .agent-node-header {
@@ -1343,35 +1358,23 @@ h1 {
 }
 
 .sentinel {
-  left: 3%;
-  top: 12%;
+  --orbit-angle: 0deg;
 }
 
 .verifier {
-  right: 4%;
-  top: 10%;
+  --orbit-angle: 72deg;
 }
 
 .coach {
-  left: 8%;
-  bottom: 5%;
+  --orbit-angle: 144deg;
 }
 
 .ally {
-  right: 3%;
-  bottom: 6%;
+  --orbit-angle: 216deg;
 }
 
 .scribe {
-  left: 50%;
-  top: 4%;
-  transform: translateX(-50%);
-}
-
-.scribe:hover,
-.scribe:focus-visible,
-.scribe.active {
-  transform: translate(-50%, -4px);
+  --orbit-angle: 288deg;
 }
 
 .steps-section {
@@ -1968,6 +1971,13 @@ h1 {
   .agent-node {
     position: relative;
     transform: none;
+  }
+
+  .agent-node {
+    animation: none;
+    left: auto;
+    top: auto;
+    width: auto;
   }
 
   .agent-call-core {
